@@ -1,0 +1,129 @@
+# Ultimate Asset Placer
+
+**Professional 3D asset placement tool for Godot 4.7+** — place, paint, scatter, spline, and physics-drop your assets with a fast, tactile editor UI. Optimised for thousands of assets.
+
+![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.1.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+
+![Ultimate Asset Placer in the Godot editor](screenshots/editor_overview.png)
+
+## Highlights
+
+- **Four placement modes** — Free, Grid, Surface (physics raycast), and Vertex (mesh magnet snap).
+- **Paint & volumetric brush** — drag-paint, circular brush with density/falloff, and mask textures.
+- **MultiMesh painting** — thousands of instances in a single draw call.
+- **Advanced spline system** — scatter props along curves or deform meshes into roads/rivers; terrain snapping; bake to nodes or MultiMesh.
+- **Random transforms** — random rotation, tilt, and scale, per placement.
+- **Groups & Favorites** — organise assets into named collections, random group placement.
+- **Material override & auto collision** — Replace/Next-Pass materials, Static/Rigid/Character/Area bodies with five shape types.
+- **Physics tab** — lift, drop, tumble and settle existing scene objects entirely inside the editor.
+- **Asset Zoo** — lays out your whole library in a 3D grid for inspection.
+
+## What's new in v2.1.0 — the "3D tactile" UI overhaul
+
+### Tactile raised buttons
+Every active control is now a **solid, raised 3D button** — full color, a darker bottom bevel, and a soft drop shadow. No semitransparency anywhere. Inactive buttons are clean flat dark with no harsh white highlight.
+
+- Placement modes light up in their own color (Free grey / Grid blue / Surface green / Vertex yellow)
+- Scroll Wheel Control's active target is highlighted blue — **including "Off"**, which previously had no visible active state
+
+![Tactile 3D buttons](screenshots/tactile_buttons.png)
+
+### Blender-style left feature rail
+All nine feature pages live on a **vertical icon rail on the left edge of the panel** — like Blender's toolbar. Every feature is permanently one click away; no horizontal scrolling, no clipped tabs.
+
+### Chapter-style Docs window
+The Docs button opens a **dedicated documentation window in the center of the screen** with **15 clickable chapters** in a sidebar. Closing it returns you to exactly the feature page you were on.
+
+![Documentation window](screenshots/docs_window.png)
+
+### Right-click menu on asset cards
+Right-click any card (or a whole multi-selection) to **add/remove favorites**, **add to any group**, or **remove assets from the browser list** (reversible — nothing is deleted from disk).
+
+![Context menu](screenshots/context_menu.png)
+
+### Inset 3D groups
+Group chips (All / Favorites / your groups) are now recessed **into** the panel — darker than the panel with a dark top inner edge; the active chip is a deep blue recess with a gold star for Favorites.
+
+![Group chips](screenshots/group_chips.png)
+
+### Fixed favorite star overflow
+The favorite star sits cleanly **inside** each card's top-right corner at every editor scale (it previously overflowed outside the card).
+
+![Asset cards with favorite stars](screenshots/asset_cards.png)
+
+See [CHANGELOG.md](CHANGELOG.md) for the complete, detailed change history.
+
+## Installation
+
+### Option A — from a release zip
+1. Download `ultimate_asset_placer_v2.1.0.zip` from the [Releases](../../releases) page.
+2. Extract it into your project folder so you end up with `res://addons/ultimate_placer/`.
+3. Open **Project → Project Settings → Plugins** and enable **Ultimate Asset Placer**.
+4. The **Asset Browser** appears as a bottom panel and the **settings panel** docks to the right.
+
+### Option B — this repository
+Clone the repository and open it directly in Godot 4.7+ — the plugin is pre-enabled and a `demo_assets/` folder with sample `.obj` models and a 3D scene is included for a quick test drive.
+
+## Quick start
+
+1. Open (or create) a **3D scene**.
+2. In the **Asset Browser**, point **Folder** at a directory containing your 3D assets (`GLB, GLTF, FBX, OBJ, DAE, BLEND, TSCN, SCN, RES, MESH`) and click **Refresh**.
+3. **Left-click** a thumbnail card — a ghost preview follows your cursor in the viewport.
+4. **Left-click** in the viewport to place. **Right-click / ESC** stops placing.
+5. Everything is undoable with **Ctrl+Z**.
+
+Tip: switch the scroll wheel target with the blue buttons (Scale, Rot Y/X/Z, Height — or Off), and use the **left rail** to reach any feature page in one click.
+
+## Feature tour
+
+| Area | What it does |
+|---|---|
+| **Placement modes** | Free, Grid, Surface, Vertex — switchable any time, even mid-placement |
+| **Scroll Wheel Control** | Assign the wheel to Scale / Rot Y / Rot X / Rot Z / Height, or turn it off |
+| **Place tab** | Parent node, grid snapping, height offset, format filter, hidden-asset restore, Asset Zoo |
+| **Transform tab** | Rotation snap, live rotation sliders, 8 orient presets, random rotation/tilt/scale |
+| **Paint tab** | Drag painting, volumetric brush with mask textures, Random Group Placer, MultiMesh painter |
+| **Spline tab** | Curve scattering & mesh deformation, terrain snapping, bake to nodes or MultiMesh |
+| **Material tab** | Automatic material override (Replace or Next Pass) |
+| **Groups tab** | Named collections, folder import, smart multi-remove |
+| **Keys tab** | Rebind every placement shortcut |
+| **Collision tab** | Auto collision: 4 body types × 5 shape types |
+| **Physics tab** | Editor-side physics simulation to drop and settle objects |
+| **Docs button** | Opens the chapter-style documentation window |
+
+## Documentation
+
+The full manual ships inside the plugin — click the **Docs** button at the bottom of the left rail (the book icon). It covers every setting, all keyboard shortcuts, six workflow walkthroughs, performance notes, and a troubleshooting FAQ.
+
+## System requirements
+
+- **Godot 4.7 or newer** (standard build — no .NET required)
+- Works with any project that can open a 3D scene
+- HiDPI-ready: respects **Editor Settings → Interface → Editor Scale**
+
+## Repository layout
+
+```
+├── addons/ultimate_placer/   # the plugin (drop this folder into any project)
+│   ├── plugin.gd             # EditorPlugin entry point
+│   ├── ultimate_panel.gd     # editor UI (browser, rail, tabs, docs window)
+│   ├── ultimate_placer.gd    # placement engine
+│   ├── uap_physics.gd        # editor-side physics simulator
+│   ├── uap_path.gd           # advanced spline system
+│   ├── uap_docs.gd           # chapter-based documentation source
+│   ├── uap_icons.gd          # icon loader/cache
+│   ├── uap_thumb_gen.gd      # offline thumbnail renderer
+│   └── icons/                # flat SVG icon set
+├── demo_assets/              # sample .obj models + a demo 3D scene
+├── screenshots/              # images used in this README
+├── CHANGELOG.md              # full version history
+└── project.godot             # ready-to-open Godot 4.7 project
+```
+
+## Contributing & support
+
+Found a bug or have a feature request? Open an issue here on GitHub. The plugin is also available on [itch.io](https://choco-ted.itch.io/ultimate-asset-placer-godot-45-gd-script).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

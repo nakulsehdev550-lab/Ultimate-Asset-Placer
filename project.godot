@@ -1,0 +1,19 @@
+; Engine configuration file.
+; Ultimate Asset Placer — demo project
+config_version=5
+
+[application]
+
+config/name="Ultimate Asset Placer"
+config/description="Demo project for the Ultimate Asset Placer plugin — professional 3D asset placement for Godot 4.7+."
+run/main_scene="res://demo_assets/demo_scene.tscn"
+config/features=PackedStringArray("4.7")
+config/icon="res://icon.svg"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/ultimate_placer/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="mobile"

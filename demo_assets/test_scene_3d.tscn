@@ -1,0 +1,34 @@
+[gd_scene load_steps=6 format=3 uid="uid://demo3dscene01"]
+
+[sub_resource type="PlaneMesh" id="ground_mesh"]
+size = Vector2(40, 40)
+
+[sub_resource type="BoxShape3D" id="ground_shape"]
+size = Vector3(40, 0.2, 40)
+
+[sub_resource type="Environment" id="env"]
+background_mode = 1
+background_color = Color(0.24, 0.28, 0.36, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.7, 0.75, 0.85, 1)
+ambient_light_energy = 0.8
+
+[node name="TestScene3D" type="Node3D"]
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("ground_mesh")
+
+[node name="GroundBody" type="StaticBody3D" parent="Ground"]
+
+[node name="GroundShape" type="CollisionShape3D" parent="Ground/GroundBody"]
+shape = SubResource("ground_shape")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation = Vector3(-0.9, 0.5, 0)
+energy = 1.2
+
+[node name="Camera" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.766044, 0.642788, 0, -0.642788, 0.766044, 0, 6, 10)
