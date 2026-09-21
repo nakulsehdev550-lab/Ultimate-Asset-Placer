@@ -1,5 +1,49 @@
 # Ultimate Asset Placer — Changelog
 
+## v2.4.0 — carved asset cards + Open Scene / View Model
+
+A fourth polish round on the asset browser plus a new context-menu action.
+Verified against a **real Godot 4.7.1 editor** with a 58-step automated
+harness (assertions + screenshots), zero script errors and zero audit fails.
+
+### Asset browser cards
+- **Dark inset 3D resting state.** Cards are carved into the panel like the
+  group chips/rows: fill clearly darker than the background, a single darker
+  line along the bottom edge, no border on any other side. This replaces the
+  flat fill that was too similar to the panel background.
+- **Active color frames the thumbnail.** A single-selected card is raised in
+  blue 3D and its thumbnail well now wears a **blue ring** around the image
+  on top of the blue tint; multi-selected cards do the same in amber. The
+  selection reads around the thumbnail, not just under it.
+- **Black-outlined white card names.** Card names are near-white with a
+  black outline for legibility over any thumbnail — applied to asset browser
+  card names ONLY; every other label in the plugin stays plain.
+- **"Opened" chip.** The currently open scene shows an amber "Opened" tag in
+  the bottom-left corner of its thumbnail (baked at browser build time),
+  with the warm card tint retained. The old "(open)" name suffix is gone.
+- **Row spacing.** The asset grid keeps a clearly larger vertical margin
+  between rows than between columns so rows no longer look cramped.
+- **No layout shift on select.** Every card state stylebox now carries the
+  same content margins — previously selecting a card widened its thumbnail
+  well by the padding (2 x 4 px), visibly nudging the layout.
+- **Label min-size fix.** The ambient editor theme inflates Label minimum
+  sizes through its "normal" stylebox margins; card name labels and the
+  "Opened" chip now override it with a zero-margin stylebox so the square
+  card budget is exact (the chip previously spilled out of the thumbnail).
+
+### Context menu
+- **Open Scene / View Model.** Right-clicking a single card (scene or
+  model) offers the action at the top of the menu; it is hidden for
+  multi-selections. Scenes open in the editor with the native
+  unsaved-changes flow and an already-open guard; any active placement is
+  cancelled first so no ghost leaks across the scene switch.
+- **Reliable model viewing.** `EditorInterface.open_scene_from_path()` is a
+  silent no-op for imported scenes in Godot 4.7.1 (verified in the harness),
+  so imported formats (glb/gltf/fbx/blend) are viewed by extracting their
+  first mesh and opening it in the Inspector's interactive 3D preview; mesh
+  resources (obj/mesh) open directly. Scene/model entries carry editor theme
+  icons with a safe fallback.
+
 ## v2.3.0 — selection & click pass (borderless cards, whole-card clicks, per-tab help)
 
 A third polish round driven by hands-on feedback. Verified against a **real

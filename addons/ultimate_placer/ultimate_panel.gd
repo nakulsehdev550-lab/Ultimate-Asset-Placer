@@ -22,7 +22,10 @@ const C_DIM       := Color(0.50, 0.52, 0.60)
 const C_HEAD      := Color(0.88, 0.93, 1.00)
 const C_TEXT      := Color(0.80, 0.83, 0.90)
 const C_PLACING   := Color(1.00, 0.84, 0.22)
-const C_CARD_BG   := Color(0.155, 0.165, 0.205)
+# 2.4: resting card face = INSET dark — the same value as S_INSET_BG used by
+# the group chips/rows, so cards read as carved into the panel instead of
+# blending into it (previous lighter fill was "too similar to the background").
+const C_CARD_BG   := Color(0.078, 0.085, 0.115)
 const C_CARD_BD   := Color(0.22, 0.24, 0.32)
 const C_SEL_BD    := Color(0.28, 0.62, 1.00)
 const C_MULTI     := Color(1.00, 0.72, 0.18)
@@ -283,7 +286,7 @@ const S_SECTION_LINE := Color(0.024,0.027,0.038)
 # 2.3 card states: the thumbnail WELL is tinted to match the card's active
 # state, so the blue/amber 3D selection reads around the thumbnail too
 # instead of only on the name row at the bottom.
-const C_WELL_BG      := Color(0.098,0.105,0.138)   # resting (same as sections)
+const C_WELL_BG      := Color(0.055,0.060,0.082)   # resting: deepest inset layer (darker than the card face)
 const C_WELL_SEL     := Color(0.125,0.235,0.360)   # single-select: blue-tinted
 const C_WELL_MULTI   := Color(0.330,0.245,0.090)   # multi-select: amber-tinted
 # Tab → docs chapter (order = TabContainer page order):
@@ -1214,7 +1217,10 @@ func _build_browser_panel(root:VBoxContainer)->void:
         root.add_child(_asset_scroll)
         _asset_grid=GridContainer.new(); _asset_grid.columns=3
         _asset_grid.size_flags_horizontal=SIZE_EXPAND_FILL
-        _asset_grid.add_theme_constant_override("h_separation",6); _asset_grid.add_theme_constant_override("v_separation",6)
+        # 2.4: rows get clearly more breathing room than columns — the name row
+        # makes every card bottom-heavy, so equal gaps read vertically cramped
+        # ("upper row is very close to the bottom row").
+        _asset_grid.add_theme_constant_override("h_separation",6); _asset_grid.add_theme_constant_override("v_separation",maxi(6,int(10*_es)))
         _asset_scroll.add_child(_asset_grid)
 
 func _build_settings_panel(root:VBoxContainer)->void:
@@ -2594,15 +2600,12 @@ func _add_card(path:String)->void:
         var card:=PanelContainer.new()
         card.set_anchors_preset(Control.PRESET_FULL_RECT)
         card.mouse_filter=Control.MOUSE_FILTER_STOP
-        # 2.3 resting card face: SOLID dark fill, absolutely NO outline on any
-        # side (the 1px neutral border read as "vibe-coded" per feedback). The
-        # card is just a clean flat surface; the thumbnail well inside is the
-        # only darker area, exactly like the carved sections elsewhere.
-        var normal_style:=StyleBoxFlat.new(); normal_style.bg_color=C_CARD_BG
-        normal_style.set_corner_radius_all(5)
-        normal_style.set_border_width_all(0)
-        normal_style.content_margin_left=pad; normal_style.content_margin_right=pad
-        normal_style.content_margin_top=pad;   normal_style.content_margin_bottom=pad
+        # 2.4 resting card face: dark INSET 3D — the same carved treatment as
+        # the group chips/rows: fill clearly darker than the panel, single
+        # darker line along the bottom edge, no border anywhere else. The
+        # helper bakes the same content margins (pad) that every state
+        # stylebox now carries, so the layout never shifts on select/deselect.
+        var normal_style:=_card_select_stylebox(false)
         card.add_theme_stylebox_override("panel",normal_style)
         var vb:=VBoxContainer.new(); vb.add_theme_constant_override("separation",sep)
         vb.mouse_filter=Control.MOUSE_FILTER_IGNORE; card.add_child(vb)
@@ -2638,7 +2641,19 @@ func _add_card(path:String)->void:
         nl.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
         nl.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS
         nl.add_theme_font_size_override("font_size",maxi(10,int(11*_es)))
-        nl.add_theme_color_override("font_color",Color(0.74,0.78,0.88))
+        # 2.4 name: near-white text with a black outline — ASSET BROWSER CARD
+        # NAMES ONLY. Every other label/button in the plugin keeps its plain
+        # look (the 2.2 pass removed outlines everywhere else on purpose).
+        nl.add_theme_color_override("font_color",Color(0.93,0.95,1.0))
+        nl.add_theme_color_override("font_outline_color",Color(0,0,0,1))
+        nl.add_theme_constant_override("outline_size",maxi(2,int(3*_es)))
+        # CRITICAL (verified by probe): the ambient editor theme's Label
+        # "normal" stylebox carries content margins that INFLATE the label's
+        # minimum size (name row measured 24px tall instead of the budgeted
+        # 17 — silently overflowing the square card). A zero-margin
+        # StyleBoxEmpty makes min size = pure text, so the square card budget
+        # math (lbl_h) is exact. Same lesson as the star button in 2.1.
+        nl.add_theme_stylebox_override("normal",StyleBoxEmpty.new())
         nl.custom_minimum_size=Vector2(0,lbl_h)
         nl.vertical_alignment=VERTICAL_ALIGNMENT_CENTER
         nl.mouse_filter=Control.MOUSE_FILTER_IGNORE; vb.add_child(nl)
@@ -2647,20 +2662,45 @@ func _add_card(path:String)->void:
         if (ext2=="tscn" or ext2=="scn"):
                 var opened_root:=EditorInterface.get_edited_scene_root()
                 if is_instance_valid(opened_root) and opened_root.scene_file_path==path:
-                        # 2.3: borderless like every other resting card — the
-                        # warm fill + amber name carry the "open" signal.
+                        # 2.4: same inset language as the resting card, but with
+                        # a warm dark fill so the open state still pops; the
+                        # "Opened" chip on the thumbnail (below) now carries the
+                        # open signal — the name stays uniform white/outline.
                         var open_style:=StyleBoxFlat.new()
-                        open_style.bg_color=Color(0.30,0.15,0.05,1.0)
+                        open_style.bg_color=Color(0.216,0.118,0.048)
                         open_style.set_corner_radius_all(5)
-                        open_style.set_border_width_all(0)
+                        open_style.border_width_bottom=maxi(2,int(2*_es))
+                        open_style.border_color=Color(0.082,0.042,0.016)
                         open_style.content_margin_left=pad; open_style.content_margin_right=pad
                         open_style.content_margin_top=pad;  open_style.content_margin_bottom=pad
                         card.add_theme_stylebox_override("panel",open_style)
                         card.tooltip_text=path+"\nCurrently open — cannot place inside itself."
-                        # No extra label row (it would break the square budget) —
-                        # the name itself carries the "open" hint in amber.
-                        nl.text+="  (open)"
-                        nl.add_theme_color_override("font_color",C_WARN)
+                        # "Opened" chip pinned to the THUMBNAIL's bottom-left
+                        # corner (user request). It is a child of the
+                        # TextureRect — a plain Control, not a Container — so
+                        # its anchors/offsets are deterministic and the square
+                        # card budget is untouched.
+                        var chip:=Label.new(); chip.text="Opened"
+                        chip.mouse_filter=Control.MOUSE_FILTER_IGNORE
+                        var chip_h:=maxi(11,int(13*_es))
+                        chip.anchor_left=0.0; chip.anchor_right=0.0
+                        chip.anchor_top=1.0;  chip.anchor_bottom=1.0
+                        chip.offset_left=int(3*_es)
+                        chip.offset_right=chip.offset_left+maxi(40,int(46*_es))
+                        chip.offset_bottom=-int(2*_es)
+                        chip.offset_top=chip.offset_bottom-chip_h
+                        chip.horizontal_alignment=HORIZONTAL_ALIGNMENT_LEFT
+                        chip.vertical_alignment=VERTICAL_ALIGNMENT_CENTER
+                        chip.add_theme_font_size_override("font_size",maxi(8,int(9*_es)))
+                        chip.add_theme_color_override("font_color",C_WARN)
+                        chip.add_theme_color_override("font_outline_color",Color(0,0,0,1))
+                        chip.add_theme_constant_override("outline_size",maxi(2,int(2*_es)))
+                        # Zero-margin stylebox: without it the ambient editor
+                        # theme inflates the label's minimum size far beyond
+                        # the 13px chip rect and the chip spills out of the
+                        # thumbnail (confirmed by probe + harness).
+                        chip.add_theme_stylebox_override("normal",StyleBoxEmpty.new())
+                        ir.add_child(chip)
         if _multi_selected.has(path):
                 _card_apply_state(card,2)
         wrapper.add_child(card)
@@ -2729,6 +2769,7 @@ func _fallback_icon(path:String)->Texture2D:
 
 # ─── Asset Card Right-Click Context Menu (2.1) ──────────────────────────────
 ## Right-clicking an asset card opens a themed popup with quick actions:
+##   • Open Scene / View Model (2.4 — single asset only)
 ##   • Toggle Favorites for the card (or all cards in the active multi-selection)
 ##   • Add to any created group (submenu)
 ##   • Remove the asset(s) from the browser list (reversible, never deletes files)
@@ -2740,6 +2781,21 @@ func _open_card_context_menu(path:String)->void:
         if targets.is_empty(): return
         var menu:=PopupMenu.new()
         _style_popup_menu(menu)
+        # 2.4 — single-target convenience: open a scene in the editor, or view
+        # a model. Only offered for ONE asset (multi-target has no meaningful
+        # single "open" action) and only for scene/model formats.
+        if targets.size()==1:
+                var p0:=targets[0] as String
+                var ext0:=p0.get_extension().to_lower()
+                var is_scene0:=ext0=="tscn" or ext0=="scn"
+                var is_model0:=ext0 in ["obj","glb","gltf","fbx","dae","blend","mesh","res"]
+                if is_scene0 or is_model0:
+                        var ov_icon:=_editor_icon(["PackedScene","Load"] if is_scene0 else ["Mesh","MeshInstance3D"])
+                        var ov_idx:=menu.get_item_count()
+                        menu.add_icon_item(ov_icon, "Open Scene" if is_scene0 else "View Model", 3)
+                        menu.set_item_tooltip(ov_idx,
+                                "Open this scene in the editor." if is_scene0 else
+                                "View this model: mesh resources (obj/mesh) and imported scene formats (glb/gltf/fbx/blend) are opened in the Inspector with an interactive 3D mesh preview.")
         var all_fav:bool=true
         for p in targets:
                 if not is_favorite(p): all_fav=false; break
@@ -2815,6 +2871,74 @@ func _on_ctx_menu_id(id:int, targets:Array)->void:
                                 removed+=1
                         _save_config(); _rebuild_browser_now()
                         set_status("Removed %d asset(s) from the list (restorable)."%removed,C_WARN)
+                3:
+                        # 2.4 — Open Scene / View Model (single target only).
+                        if targets.size()==1: _open_or_view_asset(targets[0] as String)
+
+func _editor_icon(names:Array)->Texture2D:
+        ## Fetches the first available editor theme icon from `names`, falling
+        ## back to the plugin's own browse icon so the menu item never ends up
+        ## icon-less regardless of editor theme differences.
+        var et:=EditorInterface.get_editor_theme()
+        if et!=null:
+                for n in names:
+                        if et.has_icon(n as String,"EditorIcons"): return et.get_icon(n as String,"EditorIcons")
+        return UAPIcons.get_icon("action_browse")
+
+func _open_or_view_asset(path:String)->void:
+        ## 2.4 — "Open Scene" / "View Model" from the card context menu.
+        ## Scenes open in the editor (the native unsaved-changes confirmation
+        ## applies). Models open in the Inspector: mesh resources (obj/mesh)
+        ## directly, and imported scene formats (glb/gltf/fbx/blend) via their
+        ## first mesh — both render an interactive 3D preview there.
+        if not ResourceLoader.exists(path):
+                set_status("File not found: "+path.get_file(),C_ERROR); return
+        var ext:=path.get_extension().to_lower()
+        var is_scene:=ext=="tscn" or ext=="scn"
+        # Switching context: cancel any active placement ghost first so it
+        # cannot leak across a scene change.
+        if _is_placing: _on_stop_pressed()
+        if is_scene:
+                var root:=EditorInterface.get_edited_scene_root()
+                if is_instance_valid(root) and root.scene_file_path==path:
+                        set_status("This scene is already open in the editor.",C_WARN); return
+                EditorInterface.open_scene_from_path(path)
+                set_status("Opened scene: "+path.get_file(),C_OK)
+                return
+        var res:Resource = ResourceLoader.load(path)
+        if res==null:
+                set_status("Could not load: "+path.get_file(),C_ERROR); return
+        if res is PackedScene and not is_scene:
+                # Imported model scene (glb/gltf/fbx/blend). NOTE (verified in
+                # the 4.7.1 harness): EditorInterface.open_scene_from_path() is
+                # a SILENT NO-OP for imported scenes — no error, no scene
+                # switch. So instead: instantiate off-tree, pull the first mesh
+                # and open it in the Inspector, which renders an interactive 3D
+                # preview. If the scene has no mesh, show the resource itself.
+                var ps:=res as PackedScene
+                var inst:Node = ps.instantiate()
+                var mesh:=_find_first_mesh(inst)
+                if inst!=null: inst.free()
+                if mesh!=null:
+                        EditorInterface.edit_resource(mesh)
+                        set_status("Viewing model: "+path.get_file()+" (mesh preview in Inspector)",C_OK)
+                else:
+                        EditorInterface.edit_resource(res)
+                        set_status("Viewing model: "+path.get_file(),C_OK)
+        else:
+                EditorInterface.edit_resource(res)
+                set_status("Viewing: "+path.get_file(),C_OK)
+
+func _find_first_mesh(node:Node)->Mesh:
+        ## Depth-first search for the first renderable mesh inside an
+        ## instantiated model scene (used by "View Model").
+        if node is MeshInstance3D:
+                var m:Mesh=(node as MeshInstance3D).mesh
+                if m!=null: return m
+        for c in node.get_children():
+                var r:=_find_first_mesh(c)
+                if r!=null: return r
+        return null
 
 func _on_ctx_add_to_group(group_idx:int, targets:Array)->void:
         if group_idx<100: return
@@ -2886,14 +3010,21 @@ func activate_asset_from_eyedropper(path:String)->void:
         set_status("Picked: "+path.get_file().get_basename()+" (hidden by current filter)   |   RMB / ESC = cancel",C_PLACING)
 
 func _card_select_stylebox(selected:bool)->StyleBoxFlat:
-        # 2.3 card faces. Resting (selected=false): solid dark fill with NO
-        # border of any kind — flat, clean, nothing "vibe-coded" about it.
-        # selected=true is kept for compatibility and now returns the raised
-        # amber multi-select treatment (see _card_select_stylebox_raised).
+        # 2.4 card faces. Resting (selected=false): dark INSET 3D — carved into
+        # the panel exactly like the group chips/rows: fill clearly darker than
+        # the panel, a single darker line along the bottom edge, no border on
+        # any other side. selected=true is kept for compatibility and returns
+        # the raised amber multi-select treatment (see below).
         var sb:=StyleBoxFlat.new(); sb.set_corner_radius_all(5)
         if selected:
                 return _card_select_stylebox_raised(C_MULTI)
         sb.bg_color=C_CARD_BG
+        sb.border_width_bottom=maxi(2,int(2*_es))
+        sb.border_color=S_INSET_SHADOW
+        # Content margins MUST match the initial card stylebox (pad), otherwise
+        # the thumb well would change width every time a card is deselected.
+        sb.content_margin_left=maxi(3,int(4*_es)); sb.content_margin_right=maxi(3,int(4*_es))
+        sb.content_margin_top=maxi(3,int(4*_es));  sb.content_margin_bottom=maxi(3,int(4*_es))
         return sb
 
 ## Raised 3D treatment for an "active" card (blue by default, amber for
@@ -2905,14 +3036,18 @@ func _card_select_stylebox_raised(color:Color)->StyleBoxFlat:
         sb.border_color=color.darkened(0.5)
         sb.shadow_color=Color(0,0,0,0.35); sb.shadow_size=int(3*_es)
         sb.shadow_offset=Vector2(0,int(2*_es))
+        # Same content margins as the resting face — selecting a card must
+        # never shift its internal layout (the well used to widen by 2*pad).
+        sb.content_margin_left=maxi(3,int(4*_es)); sb.content_margin_right=maxi(3,int(4*_es))
+        sb.content_margin_top=maxi(3,int(4*_es));  sb.content_margin_bottom=maxi(3,int(4*_es))
         return sb
 
 ## 2.3 — ONE entry point for every card visual state. `card` is the
 ## PanelContainer (as stored in _card_map), `state`:
-##   0 = resting        → solid dark face, no outline, neutral well
-##   1 = single-select  → BLUE raised 3D face + blue-tinted well around the
-##                        thumbnail (previously the blue only showed on the
-##                        name row — the well stayed dark)
+##   0 = resting        → dark INSET face (2.4: carved like the groups) +
+##                        neutral darkest-layer well
+##   1 = single-select  → BLUE raised 3D face + blue-tinted well FRAMED in
+##                        blue (2.4: ring around the thumbnail)
 ##   2 = multi-select   → AMBER raised 3D face (same bevel+shadow language,
 ##                        previously a flat bordered box with no 3D) +
 ##                        amber-tinted well
@@ -2922,22 +3057,33 @@ func _card_apply_state(card:PanelContainer, state:int)->void:
         match state:
                 1:
                         card.add_theme_stylebox_override("panel",_card_select_stylebox_raised(C_SEL_BD))
-                        _card_well_bg(well_v,C_WELL_SEL)
+                        _card_well_bg(well_v,C_WELL_SEL,C_SEL_BD)
                 2:
                         card.add_theme_stylebox_override("panel",_card_select_stylebox_raised(C_MULTI))
-                        _card_well_bg(well_v,C_WELL_MULTI)
+                        _card_well_bg(well_v,C_WELL_MULTI,C_MULTI)
                 _:
                         card.add_theme_stylebox_override("panel",_card_select_stylebox(false))
                         _card_well_bg(well_v,C_WELL_BG)
 
 ## Re-tints a card's thumbnail well (see _card_apply_state). Accepts an
 ## untyped ref because the meta lookup may return null for old cards.
-func _card_well_bg(well_v:Variant, col:Color)->void:
+func _card_well_bg(well_v:Variant, col:Color, ring:=Color(0,0,0,0))->void:
         if well_v==null or not (well_v is PanelContainer): return
         var well:=well_v as PanelContainer
         if not is_instance_valid(well): return
         var sb:=StyleBoxFlat.new(); sb.bg_color=col; sb.set_corner_radius_all(3)
         sb.set_content_margin_all(0)
+        if ring.a>0.0:
+                # 2.4 active well: the thumbnail is FRAMED by a ring in the
+                # active color (blue single-select / amber multi-select) on top
+                # of the tinted background — the selection reads around the
+                # image, not just under it.
+                sb.set_border_width_all(maxi(1,int(2*_es)))
+                sb.border_color=ring
+        else:
+                # Resting well: deepest layer of the inset stack + bottom line.
+                sb.border_width_bottom=1
+                sb.border_color=S_INSET_SHADOW
         well.add_theme_stylebox_override("panel",sb)
 
 func _toggle_multi_select(path:String,card:PanelContainer)->void:

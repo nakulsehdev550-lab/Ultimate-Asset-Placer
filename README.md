@@ -2,7 +2,7 @@
 
 **Professional 3D asset placement tool for Godot 4.7+** — place, paint, scatter, spline, and physics-drop your assets with a fast, tactile editor UI. Optimised for thousands of assets.
 
-![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.3.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.4.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ![Ultimate Asset Placer in the Godot editor](screenshots/editor_overview.png)
 
@@ -17,6 +17,28 @@
 - **Material override & auto collision** — Replace/Next-Pass materials, Static/Rigid/Character/Area bodies with five shape types.
 - **Physics tab** — lift, drop, tumble and settle existing scene objects entirely inside the editor.
 - **Asset Zoo** — lays out your whole library in a 3D grid for inspection.
+
+## What's new in v2.4.0 — carved asset cards, Open Scene / View Model
+
+- **Asset cards are now dark inset 3D.** Resting cards are carved into the
+  panel exactly like the group chips — a clearly darker face with a single
+  darker line along the bottom edge, no border on any other side. No more
+  cards blending into the background.
+- **Selection frames the thumbnail.** A selected card is raised in blue 3D
+  and its thumbnail gets a **blue ring** on top of the blue tint; Ctrl/Shift
+  multi-select does the same in amber. The active color reads AROUND the
+  image, not just under it.
+- **White card names with a black outline** for crisp legibility over any
+  thumbnail (asset browser card names only).
+- **"Opened" chip.** The scene that is currently open in the editor is
+  marked with an amber "Opened" tag in the bottom-left corner of its
+  thumbnail (and keeps its warm card tint).
+- **Roomier rows.** The asset grid now keeps a clearly larger vertical
+  margin between rows than between columns, so rows no longer read cramped.
+- **Open Scene / View Model in the card context menu.** Right-click a single
+  card to open that scene in the editor, or view a model: mesh resources
+  (obj/mesh) and imported scene formats (glb/gltf/fbx/blend) are shown in
+  the Inspector with an interactive 3D mesh preview.
 
 ## What's new in v2.3.0 — borderless cards, whole-card clicks, per-tab help
 
@@ -101,7 +123,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete, detailed change history.
 ## Installation
 
 ### Option A — from a release zip
-1. Download `ultimate_asset_placer_v2.3.0.zip` from the [Releases](../../releases) page.
+1. Download `ultimate_asset_placer_v2.4.0.zip` from the [Releases](../../releases) page.
 2. Extract it into your project folder so you end up with `res://addons/ultimate_placer/`.
 3. Open **Project → Project Settings → Plugins** and enable **Ultimate Asset Placer**.
 4. The **Asset Browser** appears as a bottom panel and the **settings panel** docks to the right.
