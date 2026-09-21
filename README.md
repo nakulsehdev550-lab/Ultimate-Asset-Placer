@@ -2,7 +2,7 @@
 
 **Professional 3D asset placement tool for Godot 4.7+** — place, paint, scatter, spline, and physics-drop your assets with a fast, tactile editor UI. Optimised for thousands of assets.
 
-![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.1.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.2.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ![Ultimate Asset Placer in the Godot editor](screenshots/editor_overview.png)
 
@@ -17,6 +17,31 @@
 - **Material override & auto collision** — Replace/Next-Pass materials, Static/Rigid/Character/Area bodies with five shape types.
 - **Physics tab** — lift, drop, tumble and settle existing scene objects entirely inside the editor.
 - **Asset Zoo** — lays out your whole library in a 3D grid for inspection.
+
+## What's new in v2.2.0 — polish pass
+
+### Carved-in 3D groups (everywhere, one design)
+All groups — section boxes, group chips, group rows — now share a single **carved-in** look: a fill clearly **darker than the panel**, **no outline border on any side**, and a single darker **line along the bottom edge** that makes the surface read as chiseled into the panel.
+
+![Carved-in groups](screenshots/carved_groups.png)
+
+### Square asset cards with landscape thumbnails
+Cards are now **perfectly square cells** with a **rectangular (landscape) thumbnail area** on top and the **name inside the card** at the bottom. The grid uses exact slot math, so cards **can never overlap or clip** again, and thumbnails keep their aspect ratio — never stretched, never cropped.
+
+![Square asset cards](screenshots/square_cards.png)
+
+### Advanced header collapse — groups stay on the bar
+The **Search & Filters sub-collapse is gone** (folder/search/groups are always visible while expanded). The master bar collapse got smarter: expanded it shows the "Ultimate Asset Placer" title; **collapsed it moves the group chips into the bar** so every group remains one click away in the slim state.
+
+![Collapsed bar with groups](screenshots/collapsed_groups_bar.png)
+
+### Rail hover names + active tab title
+Hovering a rail icon pops an **instant name label** (Place, Transform, Paint…) right next to the rail — no editor-tooltip delay. The **active tab's name is also written on a header bar on top of the tab panel**.
+
+![Rail hover names](screenshots/rail_hover_names.png)
+
+### No more dark text outline
+Active button labels are plain near-white — the dark font outline around the text of the placement-mode and scroll buttons was removed.
 
 ## What's new in v2.1.0 — the "3D tactile" UI overhaul
 
@@ -42,7 +67,7 @@ Right-click any card (or a whole multi-selection) to **add/remove favorites**, *
 ![Context menu](screenshots/context_menu.png)
 
 ### Inset 3D groups
-Group chips (All / Favorites / your groups) are now recessed **into** the panel — darker than the panel with a dark top inner edge; the active chip is a deep blue recess with a gold star for Favorites.
+Group chips (All / Favorites / your groups) are recessed **into** the panel — darker than the panel, no border, with a dark bottom line; the active chip is a deep blue recess with a gold star for Favorites.
 
 ![Group chips](screenshots/group_chips.png)
 
@@ -56,7 +81,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete, detailed change history.
 ## Installation
 
 ### Option A — from a release zip
-1. Download `ultimate_asset_placer_v2.1.0.zip` from the [Releases](../../releases) page.
+1. Download `ultimate_asset_placer_v2.2.0.zip` from the [Releases](../../releases) page.
 2. Extract it into your project folder so you end up with `res://addons/ultimate_placer/`.
 3. Open **Project → Project Settings → Plugins** and enable **Ultimate Asset Placer**.
 4. The **Asset Browser** appears as a bottom panel and the **settings panel** docks to the right.

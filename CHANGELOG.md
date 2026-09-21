@@ -1,5 +1,50 @@
 # Ultimate Asset Placer — Changelog
 
+## v2.2.0 — UI polish pass ("carved" groups, square cards, smarter collapse)
+
+A refinement pass over the v2.1 UI, driven by hands-on feedback from a real
+editing session. Verified against a **real Godot 4.7.1 editor** with rendered
+screenshots of every tab, the browser, both header states, the hover names
+and the context menu.
+
+### Fixed / changed
+- **No dark text outline on active buttons.** The placement-mode and scroll
+  buttons drew their white labels with a dark font outline; labels are now
+  plain near-white.
+- **Groups are carved in, everywhere, with one design.** Section boxes, group
+  chips and group rows share the same recessed style: a fill clearly darker
+  than the panel, **no outline border on any side**, and a single darker line
+  along the BOTTOM edge — the box reads as chiseled into the panel. The old
+  semitransparent blue border and accent-tinted header fill are gone.
+- **Square asset cards.** Cards are perfectly square cells with a landscape
+  (rectangular) thumbnail area on top and the asset name inside the card at
+  the bottom — replacing the old portrait cards whose name rows overflowed
+  their grid slot and visually overlapped neighbours.
+- **Overlap is now structurally impossible.** The grid column count uses
+  exact slot math (`(width + sep) / (card + sep)`), so every row fits the
+  visible width precisely; verified programmatically in the editor
+  (squareness, zero cell intersections, exact x-positions).
+- **Thumbnails never stretch.** Renders keep their aspect ratio inside the
+  landscape well (square renders pillarbox neatly). Small editor fallback
+  icons now draw at native size instead of being blown up into a blurry
+  fill-the-well icon.
+- **Favorite star fully inside the card** (top-right corner, small inset) on
+  the new square card, at every editor scale.
+- **Search & Filters sub-collapse removed.** The folder / search / group rows
+  are always visible while the header is expanded.
+- **Advanced header collapse.** Collapsing the master bar now moves the group
+  chip strip INTO the title bar — title and version hide, and every group
+  stays directly clickable in the slim state. Expanding moves the chips back
+  below the search row.
+- **Rail hover names.** Hovering a left-rail icon instantly pops a small name
+  label ("Place", "Transform", … "Docs") beside the rail — no native tooltip
+  delay.
+- **Active tab title bar.** The name of the active feature tab is written on
+  a slim carved bar on top of the tab panel and follows tab changes.
+
+### Internal
+- Version bumped to 2.2.0 (plugin.cfg, README).
+
 ## v2.1.0 — Full UI Overhaul ("3D tactile" design language)
 
 A ground-up visual overhaul of the plugin's editor UI, plus a new asset-card

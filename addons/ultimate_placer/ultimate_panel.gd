@@ -266,8 +266,10 @@ const RAIL_ICON_NAMES := ["tab_place","tab_transform","tab_paint","tab_spline","
 
 # Shared style constants for the 3D tactile language:
 #  • raised  = active/selected  (full color, darker bottom edge, subtle drop shadow)
-#  • inset   = chips/groups     (recessed: darker than panel, dark top inner edge)
+#  • inset   = chips/groups/sections (carved INTO the panel: darker fill, no
+#              outline border anywhere, single darker line along the BOTTOM edge)
 #  • idle    = resting buttons  (clean flat dark, no white highlight)
+# Text on raised faces is plain near-white — NO dark font outline.
 const S_IDLE_BG      := Color(0.165,0.175,0.225)
 const S_IDLE_HOVER   := Color(0.205,0.215,0.275)
 const S_IDLE_PRESSED := Color(0.135,0.145,0.19)
@@ -276,7 +278,8 @@ const S_INSET_HOVER  := Color(0.095,0.103,0.138)
 const S_INSET_SHADOW := Color(0.028,0.031,0.045)
 const S_INSET_ACTIVE_BG    := Color(0.085,0.190,0.310)
 const S_INSET_ACTIVE_EDGE  := Color(0.030,0.068,0.115)
-const S_TEXT_OUTLINE := Color(0.04,0.06,0.09,0.85)
+const S_SECTION_BG   := Color(0.098,0.105,0.138)
+const S_SECTION_LINE := Color(0.024,0.027,0.038)
 
 var settings_ui:VBoxContainer=null; var browser_ui:VBoxContainer=null
 var _search_panel:VBoxContainer=null; var _folder_edit:LineEdit=null
@@ -290,11 +293,18 @@ var _group_chip_btns:Array=[]   # filter-bar chips, in visual order
 var _group_chip_idxs:Array=[]    # matching filter indices: -1 All, -2 Favorites, 0..n groups
 var _multisel_bar:HBoxContainer=null; var _multisel_lbl:Label=null
 var _multisel_group_opt:OptionButton=null
-# Master header collapse (title row / Search & Filters / status bar, as one
-# block, separate from the Search & Filters section's own toggle).
+# 2.2: tab-name header + instant rail hover-name
+var _tab_header_lbl:Label=null
+var _rail_tip_layer:Control=null; var _rail_tip_panel:PanelContainer=null; var _rail_tip_lbl:Label=null
+# 2.2: advanced header collapse — when collapsed, the group chip strip moves
+# INTO the title bar so every group stays one click away.
+var _header_title_row:HBoxContainer=null; var _header_title_lbl:Label=null
+# Master header collapse (title row / search rows / status bar as one block).
+# 2.2: the "Search & Filters" section toggle was removed — only the master
+# collapse remains, and it keeps the group chips visible on the bar.
 var _header_collapsed:bool=false
 var _header_master_btn:Button=null; var _header_ver_lbl:Label=null
-var _header_filters_toggle_btn:Button=null; var _status_bar_panel:PanelContainer=null
+var _status_bar_panel:PanelContainer=null
 var _rot_x_spin:SliderSpin=null; var _rot_y_spin:SliderSpin=null; var _rot_z_spin:SliderSpin=null
 var _grid_size_spin:SliderSpin=null; var _grid_h_spin:SliderSpin=null
 var _height_spin:SliderSpin=null; var _scale_spin:SliderSpin=null
@@ -377,11 +387,8 @@ func refresh_icons() -> void:
                 if _card_map.has(p):
                         var fc := _card_map[p] as PanelContainer
                         if is_instance_valid(fc): _update_card_favorite_star(fc, p)
-        # Header chevrons (collapse master + Search & Filters toggle).
+        # Header chevron (master collapse) — refresh its icon/tooltip state.
         _apply_header_collapsed()
-        if is_instance_valid(_header_filters_toggle_btn):
-                UAPIcons.set_button_icon(_header_filters_toggle_btn,
-                        "action_chevron_down" if _header_filters_toggle_btn.button_pressed else "action_chevron_right")
         _update_spline_mode_label()
 
 
@@ -580,7 +587,21 @@ func _on_thumb_gen_ready(path: String, tex: ImageTexture) -> void:
 
 func _set_texture_safely(path:String, tex:Texture2D, ir_id:int)->void:
         var ir = instance_from_id(ir_id) as TextureRect
-        if is_instance_valid(ir) and ir.get_meta("uap_path","") == path: ir.texture = tex
+        if is_instance_valid(ir) and ir.get_meta("uap_path","") == path: _card_apply_texture(ir,tex)
+
+## 2.2: cards show thumbnails in a LANDSCAPE well, so the stretch mode has to
+## depend on what the texture actually is:
+##  • real rendered thumbnails (square, rendered at preview size) → keep-aspect
+##    centered: they scale down to the well height and pillarbox neatly, never
+##    stretched or cropped.
+##  • small editor fallback icons (16-32px theme icons shown before a render
+##    exists) → draw at native size, centered. Scaling those up to the well
+##    height produced a huge blurry icon (spotted in the 2.2 editor run).
+func _card_apply_texture(ir:TextureRect, tex:Texture2D)->void:
+        if ir==null or tex==null: return
+        var native:bool=tex.get_size().y<float(maxi(40,int(40*_es)))
+        ir.stretch_mode=TextureRect.STRETCH_KEEP_CENTERED if native else TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+        ir.texture=tex
 
 func _thumb_cache_set(path:String, tex:Texture2D)->void:
         if _thumb_cache.has(path): _thumb_lru.erase(path)
@@ -714,7 +735,13 @@ func _update_columns()->void:
         var w:=_asset_scroll.size.x
         if w<20.0: w=browser_ui.size.x-4.0
         if w<20.0: w=180.0
-        var cols:=maxi(1,int(w/float(_preview_size+6)))
+        # Exact slot math: every card is a square of _preview_size px, so
+        # `cols` cards plus (cols-1) separators must never exceed the visible
+        # width. This is what guarantees cards can never overlap or clip —
+        # the old formula (w/(S+6)) could overestimate by one column and let
+        # the grid overflow horizontally.
+        var sep:int=_asset_grid.get_theme_constant("h_separation")
+        var cols:=maxi(1,int((w+sep)/float(_preview_size+sep)))
         var n:=_asset_grid.get_child_count()
         if n>0: cols=mini(cols,n)
         _asset_grid.columns=cols
@@ -766,13 +793,17 @@ func _style_raised(bg:Color, radius:int=4)->StyleBoxFlat:
         sb.content_margin_top=int(4*_es);  sb.content_margin_bottom=int(5*_es)
         return sb
 
-## Inset "recessed" style: darker than the surrounding panel with a dark top
-## inner edge — the visual opposite of _style_raised(). Used for group chips.
+## Inset "carved" style: a surface recessed INTO the panel. Darker fill than
+## the surrounding panel, NO outline border on any side — the only edge
+## marking is a single darker line along the BOTTOM edge, which reads exactly
+## like the bottom bevel of the raised style but inverted: the surface looks
+## chiseled inward instead of sitting outward. Used for group chips, group
+## rows and the collapsible section boxes so every "group" shares one design.
 func _style_inset(active:bool)->StyleBoxFlat:
         var sb:=StyleBoxFlat.new()
         sb.bg_color=S_INSET_ACTIVE_BG if active else S_INSET_BG
         sb.set_corner_radius_all(4)
-        sb.border_width_top=maxi(1,int(2*_es)) if active else maxi(1,int(1*_es))
+        sb.border_width_bottom=maxi(2,int(2*_es))
         sb.border_color=S_INSET_ACTIVE_EDGE if active else S_INSET_SHADOW
         sb.content_margin_left=int(8*_es); sb.content_margin_right=int(8*_es)
         sb.content_margin_top=int(4*_es);  sb.content_margin_bottom=int(4*_es)
@@ -801,13 +832,12 @@ func _apply_states(btn:Button, normal:StyleBox, hover:StyleBox, pressed:StyleBox
         btn.add_theme_stylebox_override("focus",StyleBoxEmpty.new())
         btn.add_theme_stylebox_override("disabled",normal)
 
-## White text with a dark outline so labels stay readable on top of any
-## full-color raised face (including the bright yellow Vertex mode).
+## Plain near-white text for raised faces — deliberately NO dark font
+## outline (the outline was removed in 2.2: it read as a dirty black border
+## around every active button label).
 func _apply_raised_text(btn:Button)->void:
         for cn in ["font_color","font_hover_color","font_pressed_color","font_hover_pressed_color","font_focus_color"]:
                 btn.add_theme_color_override(cn,Color(0.96,0.98,1.0))
-        btn.add_theme_color_override("font_outline_color",S_TEXT_OUTLINE)
-        btn.add_theme_constant_override("outline_size",maxi(1,int(2*_es)))
 
 ## Restores default editor-theme text colors on an idle button.
 func _clear_raised_text(btn:Button)->void:
@@ -841,9 +871,14 @@ func _style_inset_hover_box()->StyleBoxFlat:
         var sb:=_style_inset(false); sb.bg_color=S_INSET_HOVER; return sb
 
 func _section(parent:VBoxContainer, title:String, open:bool=true)->VBoxContainer:
+        # 2.2 carved-in group design (shared with group chips/rows):
+        #   • fill clearly DARKER than the panel — no semitransparent middle
+        #   • NO outline border on any side
+        #   • one darker line along the BOTTOM edge → the box reads as carved
+        #     into the panel (same visual language as the chips/rows).
         var pc:=PanelContainer.new(); pc.size_flags_horizontal=SIZE_EXPAND_FILL
-        var ps:=StyleBoxFlat.new(); ps.bg_color=Color(0.14,0.15,0.20); ps.set_corner_radius_all(4)
-        ps.border_color=Color(C_ACCENT.r,C_ACCENT.g,C_ACCENT.b,0.20); ps.set_border_width_all(1)
+        var ps:=StyleBoxFlat.new(); ps.bg_color=S_SECTION_BG; ps.set_corner_radius_all(4)
+        ps.border_width_bottom=maxi(2,int(2*_es)); ps.border_color=S_SECTION_LINE
         ps.set_content_margin_all(0); pc.add_theme_stylebox_override("panel",ps); parent.add_child(pc)
         var outer:=VBoxContainer.new(); outer.size_flags_horizontal=SIZE_EXPAND_FILL
         outer.add_theme_constant_override("separation",0); pc.add_child(outer)
@@ -852,11 +887,15 @@ func _section(parent:VBoxContainer, title:String, open:bool=true)->VBoxContainer
         hdr.text="  "+title
         UAPIcons.set_button_icon(hdr, "action_chevron_down" if open else "action_chevron_right")
         hdr.add_theme_color_override("font_color",C_HEAD)
-        var hs:=StyleBoxFlat.new(); hs.bg_color=Color(C_ACCENT.r,C_ACCENT.g,C_ACCENT.b,0.08)
-        hs.set_corner_radius_all(0); hs.border_color=Color(C_ACCENT.r,C_ACCENT.g,C_ACCENT.b,0.20)
-        hs.border_width_bottom=1; hs.set_content_margin_all(6)
-        hdr.add_theme_stylebox_override("normal",hs); hdr.add_theme_stylebox_override("hover",hs)
-        hdr.add_theme_stylebox_override("pressed",hs); outer.add_child(hdr)
+        # Header row blends into the section surface; only a subtle lighten on
+        # hover signals clickability. No accent fill, no border.
+        var hs:=StyleBoxFlat.new(); hs.bg_color=Color(0,0,0,0); hs.set_corner_radius_all(0)
+        hs.set_content_margin_all(6)
+        var hs_hover:=StyleBoxFlat.new(); hs_hover.bg_color=Color(1,1,1,0.04); hs_hover.set_corner_radius_all(0)
+        hs_hover.set_content_margin_all(6)
+        hdr.add_theme_stylebox_override("normal",hs); hdr.add_theme_stylebox_override("hover",hs_hover)
+        hdr.add_theme_stylebox_override("pressed",hs); hdr.add_theme_stylebox_override("focus",StyleBoxEmpty.new())
+        outer.add_child(hdr)
         var wrap:=MarginContainer.new(); wrap.visible=open; wrap.size_flags_horizontal=SIZE_EXPAND_FILL
         for s in ["margin_left","margin_right","margin_top","margin_bottom"]: wrap.add_theme_constant_override(s,8)
         outer.add_child(wrap)
@@ -893,20 +932,46 @@ func _build_ui()->void:
         _apply_header_collapsed()
         _build_mode_bar(settings_ui); settings_ui.add_child(_sep()); _build_settings_panel(settings_ui)
 
-## Applies _header_collapsed to every part of the header block it covers:
-## the title row's extra content (version label), the Search & Filters
-## toggle button and its panel, and the separate status-bar panel below —
-## down to a single slim row (title text + this chevron) when collapsed.
+## Applies _header_collapsed to the header block: version label, title text,
+## the folder/search rows and the status bar hide when collapsed — while the
+## group chip strip moves INTO the title bar (2.2 advanced collapse), so all
+## groups remain one click away in the slim state.
 ## Called once after _build_header()/_build_browser_panel() build all the
 ## nodes it touches, and again every time the button is pressed.
 func _apply_header_collapsed()->void:
+        # 2.2 advanced collapse:
+        #   • expanded  → title bar shows "Ultimate Asset Placer" + version;
+        #     the group chips live in their row above the browser as before.
+        #   • collapsed → the SAME chip strip is moved INTO the title bar, so
+        #     every group stays directly clickable while the panel is collapsed.
         if not is_instance_valid(_header_master_btn): return
-        _header_ver_lbl.visible=not _header_collapsed
-        _header_filters_toggle_btn.visible=not _header_collapsed
-        _search_panel.visible=(not _header_collapsed) and _header_filters_toggle_btn.button_pressed
-        if is_instance_valid(_status_bar_panel): _status_bar_panel.visible=not _header_collapsed
-        UAPIcons.set_button_icon(_header_master_btn, "action_chevron_right" if _header_collapsed else "action_chevron_down")
-        _header_master_btn.tooltip_text="Expand header" if _header_collapsed else "Collapse header"
+        var collapsed:bool=_header_collapsed
+        if is_instance_valid(_header_ver_lbl): _header_ver_lbl.visible=not collapsed
+        if is_instance_valid(_header_title_lbl): _header_title_lbl.visible=not collapsed
+        if is_instance_valid(_status_bar_panel): _status_bar_panel.visible=not collapsed
+        if is_instance_valid(_search_panel): _search_panel.visible=not collapsed
+        if is_instance_valid(_group_bar):
+                if collapsed:
+                        if _group_bar.get_parent()!=_header_title_row:
+                                var old:=_group_bar.get_parent()
+                                if old!=null: old.remove_child(_group_bar)
+                                _header_title_row.add_child(_group_bar)
+                                _header_title_row.move_child(_group_bar,1)
+                                _group_bar.size_flags_horizontal=SIZE_EXPAND_FILL
+                                _group_bar.size_flags_vertical=SIZE_EXPAND_FILL
+                                _group_bar.visible=true
+                else:
+                        if _group_bar.get_parent()!=_search_panel:
+                                var old:=_group_bar.get_parent()
+                                if old!=null: old.remove_child(_group_bar)
+                                _search_panel.add_child(_group_bar)
+                                # folder row, search row, chips, multi-select bar
+                                _search_panel.move_child(_group_bar,2)
+                                _group_bar.size_flags_horizontal=SIZE_EXPAND_FILL
+                                _group_bar.size_flags_vertical=0
+                                _group_bar.visible=true
+        UAPIcons.set_button_icon(_header_master_btn, "action_chevron_right" if collapsed else "action_chevron_down")
+        _header_master_btn.tooltip_text="Expand panel" if collapsed else "Collapse panel — groups stay on the bar"
 
 func _build_header(root:VBoxContainer)->void:
         var hp:=PanelContainer.new(); hp.size_flags_horizontal=SIZE_EXPAND_FILL
@@ -917,10 +982,12 @@ func _build_header(root:VBoxContainer)->void:
         vb.clip_contents=true; vb.add_theme_constant_override("separation",5); hp.add_child(vb)
         var tr:=HBoxContainer.new(); tr.add_theme_constant_override("separation",6)
         tr.size_flags_horizontal=SIZE_EXPAND_FILL; vb.add_child(tr)
+        _header_title_row=tr
         var bar:=ColorRect.new(); bar.color=C_ACCENT; bar.custom_minimum_size=Vector2(3,0)
         bar.size_flags_vertical=SIZE_EXPAND_FILL; tr.add_child(bar)
         var tl:=Label.new(); tl.text="Ultimate Asset Placer"; tl.add_theme_color_override("font_color",C_HEAD)
         tl.size_flags_horizontal=SIZE_EXPAND_FILL; tl.clip_text=true; tr.add_child(tl)
+        _header_title_lbl=tl
         _header_ver_lbl=Label.new(); _header_ver_lbl.text=UAPIcons.get_plugin_version(); _header_ver_lbl.add_theme_color_override("font_color",C_DIM)
         _header_ver_lbl.size_flags_horizontal=SIZE_SHRINK_END; tr.add_child(_header_ver_lbl)
         _header_master_btn=Button.new(); _header_master_btn.flat=true
@@ -930,16 +997,12 @@ func _build_header(root:VBoxContainer)->void:
         _header_master_btn.pressed.connect(func():
                 _header_collapsed=not _header_collapsed
                 _apply_header_collapsed(); _save_config())
-        _header_filters_toggle_btn=Button.new(); _header_filters_toggle_btn.text="  Search & Filters"
-        UAPIcons.set_button_icon(_header_filters_toggle_btn, "action_chevron_down")
-        _header_filters_toggle_btn.toggle_mode=true; _header_filters_toggle_btn.button_pressed=true; _header_filters_toggle_btn.flat=true
-        _header_filters_toggle_btn.alignment=HORIZONTAL_ALIGNMENT_LEFT; _header_filters_toggle_btn.size_flags_horizontal=SIZE_EXPAND_FILL
-        _header_filters_toggle_btn.add_theme_color_override("font_color",C_ACCENT2); vb.add_child(_header_filters_toggle_btn)
+        # 2.2: the "Search & Filters" collapse toggle is GONE — the folder,
+        # search and group rows are always visible while the panel is expanded.
+        # The only remaining collapse is the master bar, which keeps the group
+        # chips reachable in its collapsed state.
         _search_panel=VBoxContainer.new(); _search_panel.size_flags_horizontal=SIZE_EXPAND_FILL
         _search_panel.add_theme_constant_override("separation",5); vb.add_child(_search_panel)
-        _header_filters_toggle_btn.toggled.connect(func(v:bool):
-                _search_panel.visible=v and not _header_collapsed
-                UAPIcons.set_button_icon(_header_filters_toggle_btn, "action_chevron_down" if v else "action_chevron_right"))
         var fr:=HBoxContainer.new(); fr.add_theme_constant_override("separation",3)
         fr.size_flags_horizontal=SIZE_EXPAND_FILL; fr.clip_contents=true; _search_panel.add_child(fr)
         var flbl:=Label.new(); flbl.text="Folder:"; flbl.custom_minimum_size=Vector2(int(44*_es),0)
@@ -1046,7 +1109,7 @@ func _build_browser_panel(root:VBoxContainer)->void:
         root.add_child(_asset_scroll)
         _asset_grid=GridContainer.new(); _asset_grid.columns=3
         _asset_grid.size_flags_horizontal=SIZE_EXPAND_FILL
-        _asset_grid.add_theme_constant_override("h_separation",5); _asset_grid.add_theme_constant_override("v_separation",5)
+        _asset_grid.add_theme_constant_override("h_separation",6); _asset_grid.add_theme_constant_override("v_separation",6)
         _asset_scroll.add_child(_asset_grid)
 
 func _build_settings_panel(root:VBoxContainer)->void:
@@ -1056,16 +1119,34 @@ func _build_settings_panel(root:VBoxContainer)->void:
         # replaced by a vertical icon-only rail on the LEFT edge of the panel.
         # Every feature is one click away with no horizontal scrolling, exactly
         # like Blender's editor toolbar.
+        # ── 2.2 additions ─────────────────────────────────────────────────────
+        #  • A slim header bar above the tab page always shows the NAME of the
+        #    active tab ("Place", "Transform", ...).
+        #  • Hovering a rail icon pops an instant name label (no editor-tooltip
+        #    delay) right next to the rail.
         var outer:=HBoxContainer.new()
         outer.size_flags_horizontal=SIZE_EXPAND_FILL; outer.size_flags_vertical=SIZE_EXPAND_FILL
         outer.add_theme_constant_override("separation",int(5*_es))
         root.add_child(outer)
         _build_tab_rail(outer)
+        var right:=VBoxContainer.new(); right.size_flags_horizontal=SIZE_EXPAND_FILL
+        right.size_flags_vertical=SIZE_EXPAND_FILL; right.add_theme_constant_override("separation",int(5*_es))
+        outer.add_child(right)
+        # Tab-name header: carved bar matching the section language.
+        var thp:=PanelContainer.new(); thp.size_flags_horizontal=SIZE_EXPAND_FILL
+        var tsb:=StyleBoxFlat.new(); tsb.bg_color=S_SECTION_BG; tsb.set_corner_radius_all(4)
+        tsb.border_width_bottom=maxi(2,int(2*_es)); tsb.border_color=S_SECTION_LINE
+        tsb.content_margin_left=int(9*_es); tsb.content_margin_right=int(9*_es)
+        tsb.content_margin_top=int(4*_es); tsb.content_margin_bottom=int(4*_es)
+        thp.add_theme_stylebox_override("panel",tsb); right.add_child(thp)
+        _tab_header_lbl=Label.new(); _tab_header_lbl.text="Place"
+        _tab_header_lbl.add_theme_color_override("font_color",C_HEAD)
+        thp.add_child(_tab_header_lbl)
         _settings_tabs=TabContainer.new(); _settings_tabs.size_flags_horizontal=SIZE_EXPAND_FILL
         _settings_tabs.size_flags_vertical=SIZE_EXPAND_FILL; _settings_tabs.clip_contents=true
         _settings_tabs.custom_minimum_size=Vector2(0,int(80*_es))
         _settings_tabs.tabs_visible=false   # rail replaces the built-in tab bar
-        outer.add_child(_settings_tabs)
+        right.add_child(_settings_tabs)
         _build_place_tab(); _build_transform_tab(); _build_paint_tab()
         _build_spline_tab(); _build_material_tab(); _build_groups_tab()
         _build_keys_tab(); _build_collision_tab(); _build_physics_tab()
@@ -1074,6 +1155,49 @@ func _build_settings_panel(root:VBoxContainer)->void:
         _build_docs_rail_button()
         _refresh_tab_rail()
         _settings_tabs.tab_changed.connect(func(_i:int): _refresh_tab_rail())
+        # Instant hover-name layer (2.2): a plain Control cannot clip nor
+        # re-layout the tip, and being the LAST child of `outer` it draws on
+        # top of the tab pages. Zero min-size → invisible to the HBox layout.
+        _rail_tip_layer=Control.new(); _rail_tip_layer.mouse_filter=Control.MOUSE_FILTER_IGNORE
+        _rail_tip_layer.custom_minimum_size=Vector2.ZERO
+        _rail_tip_layer.size_flags_horizontal=0; _rail_tip_layer.size_flags_vertical=0
+        outer.add_child(_rail_tip_layer)
+        _rail_tip_panel=PanelContainer.new(); _rail_tip_panel.visible=false
+        _rail_tip_panel.mouse_filter=Control.MOUSE_FILTER_IGNORE
+        var tsb2:=StyleBoxFlat.new(); tsb2.bg_color=Color(0.06,0.068,0.095)
+        tsb2.set_corner_radius_all(3)
+        tsb2.border_width_bottom=maxi(1,int(2*_es)); tsb2.border_color=Color(0.018,0.02,0.03)
+        tsb2.content_margin_left=int(7*_es); tsb2.content_margin_right=int(7*_es)
+        tsb2.content_margin_top=int(2*_es); tsb2.content_margin_bottom=int(2*_es)
+        _rail_tip_panel.add_theme_stylebox_override("panel",tsb2)
+        _rail_tip_lbl=Label.new(); _rail_tip_lbl.mouse_filter=Control.MOUSE_FILTER_IGNORE
+        _rail_tip_lbl.add_theme_color_override("font_color",Color(0.92,0.95,1.0))
+        _rail_tip_lbl.add_theme_font_size_override("font_size",maxi(10,int(12*_es)))
+        _rail_tip_panel.add_child(_rail_tip_lbl)
+        _rail_tip_layer.add_child(_rail_tip_panel)
+
+## Instant rail hover-name (2.2). Shown immediately on mouse_entered — much
+## faster than the editor's native tooltip, and positioned next to the rail
+## like Blender's toolbar labels.
+func _show_rail_tip(btn:Control,text:String)->void:
+        if not is_instance_valid(_rail_tip_panel) or not is_instance_valid(_rail_tip_layer): return
+        if not btn.is_inside_tree(): return
+        _rail_tip_lbl.text=text
+        _rail_tip_panel.reset_size()
+        _rail_tip_panel.visible=true
+        var r:=btn.get_global_rect()
+        var pos:=Vector2(r.position.x+r.size.x+int(6*_es),
+                r.position.y+r.size.y*0.5-_rail_tip_panel.size.y*0.5)
+        # Keep the tip vertically inside the settings panel. NOTE: the tip
+        # layer itself is a zero-size helper control — clamp against its
+        # PARENT (the panel's HBox), which has the real bounds.
+        var bounds:Rect2=_rail_tip_layer.get_parent().get_global_rect()
+        pos.y=clampf(pos.y,bounds.position.y,bounds.end.y-_rail_tip_panel.size.y)
+        pos.x=clampf(pos.x,bounds.position.x,bounds.end.x-_rail_tip_panel.size.x)
+        _rail_tip_panel.global_position=pos
+
+func _hide_rail_tip()->void:
+        if is_instance_valid(_rail_tip_panel): _rail_tip_panel.visible=false
 
 # ─── Left Tab Rail (Blender-style) ───────────────────────────────────────────
 func _build_tab_rail(parent:Control)->void:
@@ -1099,6 +1223,12 @@ func _build_tab_rail(parent:Control)->void:
         for i in RAIL_ICON_NAMES.size():
                 var btn:=_make_rail_button(RAIL_ICON_NAMES[i],true)
                 btn.pressed.connect(_on_rail_tab_pressed.bind(i))
+                # 2.2: instant hover-name — show this tab's title immediately
+                # next to the rail (no native tooltip delay).
+                btn.mouse_entered.connect(func():
+                        if is_instance_valid(_settings_tabs) and i<_settings_tabs.get_tab_count():
+                                _show_rail_tip(btn,_settings_tabs.get_tab_title(i)))
+                btn.mouse_exited.connect(_hide_rail_tip)
                 _tab_rail.add_child(btn); _rail_buttons.append(btn)
 
 func _make_rail_button(icon_name:String, dim_icon:bool)->Button:
@@ -1136,7 +1266,8 @@ func _on_rail_tab_pressed(idx:int)->void:
         if is_instance_valid(_settings_tabs): _settings_tabs.current_tab=idx
         _refresh_tab_rail()
 
-## Re-dresses every rail button to match the TabContainer's live state.
+## Re-dresses every rail button to match the TabContainer's live state and
+## keeps the tab-name header above the page in sync.
 func _refresh_tab_rail()->void:
         if not is_instance_valid(_tab_rail): return
         var cur:int=_settings_tabs.current_tab if is_instance_valid(_settings_tabs) else 0
@@ -1147,6 +1278,8 @@ func _refresh_tab_rail()->void:
                 btn.set_pressed_no_signal(active)
                 if active: _raise_rail_button(btn)
                 else: _dim_rail_button(btn)
+        if is_instance_valid(_tab_header_lbl) and is_instance_valid(_settings_tabs) and cur<_settings_tabs.get_tab_count():
+                _tab_header_lbl.text=_settings_tabs.get_tab_title(cur)
 
 func _build_docs_rail_button()->void:
         if not is_instance_valid(_tab_rail): return
@@ -1155,6 +1288,8 @@ func _build_docs_rail_button()->void:
         _rail_docs_btn=_make_rail_button("tab_docs",true)
         _rail_docs_btn.tooltip_text="Docs — open the full documentation window"
         _rail_docs_btn.pressed.connect(_open_docs_window)
+        _rail_docs_btn.mouse_entered.connect(func(): _show_rail_tip(_rail_docs_btn,"Docs"))
+        _rail_docs_btn.mouse_exited.connect(_hide_rail_tip)
         _tab_rail.add_child(_rail_docs_btn)
         _dim_rail_button(_rail_docs_btn)
 
@@ -2294,40 +2429,68 @@ func _filtered_paths(filter:String)->Array:
         return result
 
 func _add_card(path:String)->void:
-        # Cards live inside a plain Control wrapper, not directly in _asset_grid.
-        # Reason (verified with an isolated repro before this fix was written):
-        # `card` below is a PanelContainer, and Godot's Container base class
-        # force-resizes EVERY direct child Control to fill its own content rect
-        # on every layout pass — silently overriding any manually-set anchors/
-        # position/size on that child. That's what made the favorite-star
-        # button's actual clickable rect cover the entire card regardless of how
-        # it was positioned, swallowing every click. `wrapper` is a plain
-        # Control (not a Container), so it does not re-enforce full-rect sizing
-        # on its children: `card` fills it voluntarily via PRESET_FULL_RECT
-        # anchors, and the star sits as a sibling with its own small rect that
-        # now actually sticks.
+        # ── 2.2 square card design ────────────────────────────────────────────
+        # Cards are now perfectly SQUARE cells: a landscape (rectangular)
+        # thumbnail area on top + the asset name inside the card at the
+        # bottom. This replaces the old portrait card (square thumb + name
+        # hanging below) that overflowed the grid slot and looked cluttered.
+        #
+        # Cards still live inside a plain Control wrapper, not directly in
+        # _asset_grid. Reason (verified with an isolated repro in 2.1):
+        # `card` is a PanelContainer, and Godot's Container base class
+        # force-resizes EVERY direct child Control to fill its own content
+        # rect on every layout pass — silently overriding any manually-set
+        # anchors/position/size on that child. That's what made the favorite
+        # star's clickable rect cover the whole card. `wrapper` is a plain
+        # Control (not a Container), so the star can sit as a sibling with
+        # its own small rect and actually stick.
+        var S:int=_preview_size
+        var pad:int=maxi(3,int(4*_es))          # inner padding inside the card
+        var bd:int=1                            # card border width
+        var sep:int=maxi(2,int(3*_es))          # gap thumb↔name
+        var lbl_h:int=maxi(14,int(17*_es))      # name row height
+        var inner_w:int=S-2*(pad+bd)
+        var thumb_h:int=S-2*(pad+bd)-lbl_h-sep  # exact square budget: no overflow
         var wrapper:=Control.new()
-        wrapper.custom_minimum_size=Vector2(_preview_size,_preview_size+20)
+        wrapper.custom_minimum_size=Vector2(S,S)   # SQUARE cell
         wrapper.mouse_filter=Control.MOUSE_FILTER_IGNORE
         var card:=PanelContainer.new()
         card.set_anchors_preset(Control.PRESET_FULL_RECT)
         card.mouse_filter=Control.MOUSE_FILTER_STOP
         var normal_style:=StyleBoxFlat.new(); normal_style.bg_color=C_CARD_BG
-        normal_style.set_corner_radius_all(5); normal_style.set_border_width_all(1)
-        normal_style.border_color=C_CARD_BD; card.add_theme_stylebox_override("panel",normal_style)
-        var vb:=VBoxContainer.new(); vb.add_theme_constant_override("separation",2)
+        normal_style.set_corner_radius_all(5); normal_style.set_border_width_all(bd)
+        normal_style.border_color=C_CARD_BD
+        normal_style.content_margin_left=pad; normal_style.content_margin_right=pad
+        normal_style.content_margin_top=pad;   normal_style.content_margin_bottom=pad
+        card.add_theme_stylebox_override("panel",normal_style)
+        var vb:=VBoxContainer.new(); vb.add_theme_constant_override("separation",sep)
         vb.mouse_filter=Control.MOUSE_FILTER_IGNORE; card.add_child(vb)
-        var ir:=TextureRect.new(); ir.custom_minimum_size=Vector2(_preview_size-4,_preview_size-4)
-        ir.expand_mode=TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+        # Thumbnail well: a slightly darker rectangular surface (same carved
+        # language as the groups) that gives the landscape thumbnail a crisp
+        # frame. The texture keeps its aspect ratio inside it — square renders
+        # pillarbox neatly, never stretched or cropped.
+        var well:=PanelContainer.new()
+        var wsb:=StyleBoxFlat.new(); wsb.bg_color=S_SECTION_BG; wsb.set_corner_radius_all(3)
+        wsb.set_content_margin_all(0)
+        well.add_theme_stylebox_override("panel",wsb)
+        well.size_flags_horizontal=SIZE_EXPAND_FILL
+        vb.add_child(well)
+        var ir:=TextureRect.new(); ir.custom_minimum_size=Vector2(inner_w,thumb_h)
+        ir.expand_mode=TextureRect.EXPAND_IGNORE_SIZE
         ir.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-        ir.mouse_filter=Control.MOUSE_FILTER_IGNORE; vb.add_child(ir)
+        ir.mouse_filter=Control.MOUSE_FILTER_IGNORE; well.add_child(ir)
         ir.set_meta("uap_path",path)
         _card_ir_map[path]=ir; _ir_path_map[ir.get_instance_id()]=path
-        if _thumb_cache.has(path): ir.texture=_thumb_cache[path] as Texture2D
+        if _thumb_cache.has(path): _card_apply_texture(ir,_thumb_cache[path] as Texture2D)
         else:
-                var fb:=_fallback_icon(path); if fb!=null: ir.texture=fb
+                var fb:=_fallback_icon(path); if fb!=null: _card_apply_texture(ir,fb)
         var nl:=Label.new(); nl.text=path.get_file().get_basename(); nl.clip_text=true
         nl.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
+        nl.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS
+        nl.add_theme_font_size_override("font_size",maxi(10,int(11*_es)))
+        nl.add_theme_color_override("font_color",Color(0.74,0.78,0.88))
+        nl.custom_minimum_size=Vector2(0,lbl_h)
+        nl.vertical_alignment=VERTICAL_ALIGNMENT_CENTER
         nl.mouse_filter=Control.MOUSE_FILTER_IGNORE; vb.add_child(nl)
         card.tooltip_text=path
         var ext2:=path.get_extension().to_lower()
@@ -2337,64 +2500,45 @@ func _add_card(path:String)->void:
                         var open_style:=StyleBoxFlat.new()
                         open_style.bg_color=Color(0.30,0.15,0.05,1.0)
                         open_style.set_corner_radius_all(5); open_style.set_border_width_all(2)
-                        open_style.border_color=C_WARN; card.add_theme_stylebox_override("panel",open_style)
+                        open_style.border_color=C_WARN
+                        open_style.content_margin_left=pad; open_style.content_margin_right=pad
+                        open_style.content_margin_top=pad;  open_style.content_margin_bottom=pad
+                        card.add_theme_stylebox_override("panel",open_style)
                         card.tooltip_text=path+"\nCurrently open — cannot place inside itself."
-                        var wl:=Label.new(); wl.text="Open"; wl.add_theme_color_override("font_color",C_WARN)
-                        wl.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER; wl.mouse_filter=Control.MOUSE_FILTER_IGNORE; vb.add_child(wl)
+                        # No extra label row (it would break the square budget) —
+                        # the name itself carries the "open" hint in amber.
+                        nl.text+="  (open)"
+                        nl.add_theme_color_override("font_color",C_WARN)
         if _multi_selected.has(path):
                 card.add_theme_stylebox_override("panel",_card_select_stylebox(true))
         wrapper.add_child(card)
         # Favorite star: a SIBLING of `card` inside `wrapper`, not a child of
         # `card` — see the comment at the top of this function for why.
-        # 2.1 fix: the star previously overflowed ABOVE/OUTSIDE the card's top
-        # edge (see user screenshot). Root cause: the button's rect was set via
-        # `position`/`size`, whose offset computation depends on the parent's
-        # CURRENT size — but `wrapper` still had zero size at that moment (it
-        # is not in the tree yet), so the offsets were baked wrong and never
-        # re-derived afterwards. The deterministic fix is to set ANCHORS and
-        # OFFSETS explicitly: anchor at the top-right corner, then pin the
-        # 18x18 button 2px inside that corner. Offsets never depend on parent
-        # size, so the star can no longer escape the card.
+        # Anchored to the top-right corner with a small INSET so the star sits
+        # fully INSIDE the card (2.1 moved it in via explicit offsets; 2.2
+        # keeps the same mechanism on the new square card).
         var fav_btn:=Button.new(); fav_btn.flat=true
-        var fav_size:=int(18*_es)
+        var fav_size:=maxi(12,int(16*_es))
+        var fav_m:=maxi(2,int(3*_es))
         fav_btn.anchor_left=1.0; fav_btn.anchor_right=1.0
         fav_btn.anchor_top=0.0;  fav_btn.anchor_bottom=0.0
-        fav_btn.offset_left=-fav_size-int(2*_es)
-        fav_btn.offset_right=-int(2*_es)
-        fav_btn.offset_top=int(2*_es)
-        fav_btn.offset_bottom=int(2*_es)+fav_size
-        #
-        # contrast against the thumbnail underneath (not the card's own dark
-        # background — the star sits in the thumbnail's corner, and real
-        # thumbnails vary hugely in color/brightness) is handled by a dark
-        # outline baked directly into the icon texture via
-        # UAPIcons.get_icon_outlined(), rather than a solid backing shape.
-        # flat=true only hides the stylebox's visual background — its CONTENT
-        # MARGINS still apply to how much room the icon gets, and the real
-        # editor theme's default Button stylebox has substantial margins
-        # (confirmed directly: 6px left/right, 4.5px top/bottom) meant for
-        # normal-sized toolbar buttons. Overriding every stylebox state to zero
-        # margins guarantees the icon gets the full button area to render in,
-        # regardless of the ambient theme.
+        fav_btn.offset_left=-fav_size-fav_m
+        fav_btn.offset_right=-fav_m
+        fav_btn.offset_top=fav_m
+        fav_btn.offset_bottom=fav_m+fav_size
+        # Legibility over any thumbnail is handled by a dark outline baked
+        # directly into the icon texture via UAPIcons.get_icon_outlined(),
+        # rather than a solid backing shape. flat=true only hides the visual
+        # background — content margins still apply, so every stylebox state is
+        # overridden with zero margins to give the icon the full button area.
         var fav_btn_style:=StyleBoxEmpty.new()
         for state in ["normal","hover","pressed","focus","disabled"]:
                 fav_btn.add_theme_stylebox_override(state,fav_btn_style)
         fav_btn.tooltip_text="Toggle Favorite"
         fav_btn.focus_mode=Control.FOCUS_NONE
-        # Deliberately NOT using expand_icon here (previously combined with the
-        # native 24x24 texture to shrink it down to the 18x18 button). Confirmed
-        # directly, via a real rendered screenshot inside the actual editor —
-        # not just the headless structural checks, which had already passed and
-        # gave no hint anything was wrong — that expand_icon's shrink path is
-        # unreliable in the real editor context: an 18x18 button asked to
-        # shrink a 24x24 icon rendered a few-pixel unrecognizable blob, even
-        # with the margin fix above already applied, while the exact same setup
-        # with expand_icon off (native size) or a larger button (so no
-        # shrinking was needed) both rendered correctly. get_icon_outlined()
-        # returns a texture already pre-resized to the exact target pixels, so
-        # nothing needs to be shrunk at draw time at all — confirmed correct at
-        # 18x18 in the real editor, for both the resting and favorited (tinted
-        # gold) states.
+        # Deliberately NOT using expand_icon here (see 2.1 notes): the outlined
+        # texture is pre-resized to the exact target pixels, so nothing is
+        # shrunk at draw time — confirmed correct in the real editor.
         UAPIcons.set_button_icon_outlined(fav_btn,"feature_favorite",fav_size)
         wrapper.add_child(fav_btn)
         _card_fav_btn_map[path]=fav_btn
