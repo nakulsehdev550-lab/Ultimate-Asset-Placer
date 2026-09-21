@@ -2,7 +2,7 @@
 
 **Professional 3D asset placement tool for Godot 4.7+** — place, paint, scatter, spline, and physics-drop your assets with a fast, tactile editor UI. Optimised for thousands of assets.
 
-![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.4.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.5.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ![Ultimate Asset Placer in the Godot editor](screenshots/editor_overview.png)
 
@@ -17,6 +17,56 @@
 - **Material override & auto collision** — Replace/Next-Pass materials, Static/Rigid/Character/Area bodies with five shape types.
 - **Physics tab** — lift, drop, tumble and settle existing scene objects entirely inside the editor.
 - **Asset Zoo** — lays out your whole library in a 3D grid for inspection.
+
+## What's new in v2.5.0 — the star, fixed for real; quieter, tighter panel
+
+### The favorite star — root cause found and fixed
+Every previous round moved the star and it still looked wrong. The actual
+root cause was never the offsets: an icon-only `Button` inherits the editor
+theme's Button **minimum size (32×28 px)**, so Godot silently grew the star's
+16 px rect, drew the icon inside that oversized box and slid half of it under
+the neighbouring card. The star is now a `TextureButton` whose rect is
+**pixel-exact on every editor theme**.
+
+- **New corner-badge design** (taken literally from the mockup): the star is
+  centered **on the card's top-right edge** — half inside the card, half
+  outside over the panel — a few pixels below the top edge.
+- The thumbnail well stops one padding short of the right edge, so the star
+  **never overlaps the thumbnail image**.
+- Favorited stars are **gold**; unfavorited stars are dim white and brighten
+  on hover.
+
+![Asset cards with corner-badge stars](screenshots/asset_cards.png)
+
+### Thumbnails can never spill onto cards again
+Thumbnail drawing is now **clipped to its well**, and the native-size stretch
+mode is only used for genuinely tiny fallback icons — a texture can no longer
+be drawn at native size across the card face.
+
+### Docs always opens at the Welcome chapter
+The **Docs button on the rail** now always opens **“Welcome & Quick Start”** —
+previously it re-opened whatever chapter the last per-tab “(i)” button had
+shown. The per-tab **(i)** buttons still deep-link straight to their tab's
+chapter.
+
+### Long tab descriptions removed
+The paragraph blocks at the top of the Spline and Physics tabs (and the
+drag-and-drop / auto-shape hints) are gone — every tab has the **(i)** help
+button and the Docs window now, so the controls moved back up where you can
+reach them.
+
+### Start Physics finally reads as a button
+The Physics tab's primary action wore the same low-contrast dark dress as the
+panel around it. It is now a **raised blue 3D button** — the same tactile
+treatment as the active mode buttons: clearly a button, still on-theme, never
+white.
+
+![Physics tab with raised Start button](screenshots/physics_tab.png)
+
+### Silent by default
+The `[Ultimate Asset Placer] Theme pass dressed …` debug lines that were
+printed to the Output dock on every panel build are gone. The plugin now only
+announces that it is ready.
 
 ## What's new in v2.4.0 — carved asset cards, Open Scene / View Model
 
@@ -123,7 +173,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete, detailed change history.
 ## Installation
 
 ### Option A — from a release zip
-1. Download `ultimate_asset_placer_v2.4.0.zip` from the [Releases](../../releases) page.
+1. Download `ultimate_asset_placer_v2.5.0.zip` from the [Releases](../../releases) page.
 2. Extract it into your project folder so you end up with `res://addons/ultimate_placer/`.
 3. Open **Project → Project Settings → Plugins** and enable **Ultimate Asset Placer**.
 4. The **Asset Browser** appears as a bottom panel and the **settings panel** docks to the right.

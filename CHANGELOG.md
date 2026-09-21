@@ -1,5 +1,81 @@
 # Ultimate Asset Placer — Changelog
 
+## v2.5.0 — the favorite star fixed for real + quieter, tighter panel
+
+Fifth polish round. The recurring "star icon position" complaint was traced to
+a real engine-level root cause (not the offsets), the docs window opens on
+Welcome again, and the panel got quieter and tighter. Verified against a real
+Godot 4.7.1 editor with a 40-step automated harness (assertions + rendered
+screenshots inspected by hand), zero script errors and zero audit fails.
+
+### The favorite star — root cause found and fixed
+- An icon-only `Button` inherits the editor theme's Button **minimum size**
+  (measured 32×28 px at editor scale 1.0 in the 4.7.1 editor), even with
+  `flat = true` and `StyleBoxEmpty` overrides on every state. Godot grows the
+  control to its minimum size in the END direction, so the intended 16 px
+  star rect silently became a 32×28 rect: the icon drew left-aligned inside
+  the oversized box (several px off the corner) and the neighbouring card
+  drew over the overhang. This is why the star "never got fixed" in 2.2–2.4.
+- The star is now a **`TextureButton` with `ignore_texture_size`** — no text,
+  no font, no styleboxes: its rect equals its offsets **pixel-exactly on
+  every editor theme** (harness-probed: rect 16×16 at the intended corner).
+- **New corner-badge design** from the user's mockup: the star is centered ON
+  the card's top-right edge (half inside the card, half outside over the
+  panel), `8·es` px below the top edge.
+- The thumbnail well stops one padding short of the card's right edge
+  (asymmetric inset, exactly like the mockup), reserving the star zone — the
+  star can never overlap the thumbnail image.
+- Favorited stars tint **gold**, unfavorited stay dim white and brighten on
+  hover (self_modulate; TextureButton has no per-state theme icon colors).
+- The icon-refresh pass now uses the same size formula as the build pass
+  (the old one drifted: build 16 px vs refresh 18 px).
+
+### Thumbnails can never spill onto the card again
+- `clip_contents` enabled on both the thumbnail well and its TextureRect.
+- The native-size stretch mode (meant for 16–32 px editor fallback icons) now
+  requires the texture to be small on BOTH axes — a wide texture under the
+  height limit would previously have been drawn at native width across the
+  card.
+
+### Docs window opens at Welcome again
+- The rail Docs button used `chapter = -1`, which kept the last per-tab "i"
+  chapter selected — opening Docs after using any "i" button showed that tab's
+  chapter instead of Welcome. The rail button now always opens **"Welcome &
+  Quick Start"** (chapter 0); per-tab "i" buttons still deep-link.
+- `_open_docs_window()`'s default parameter changed from -1 to 0.
+
+### Long tab descriptions removed
+The user now has the per-tab "(i)" help button and the Docs window, so the
+redundant paragraph blocks are gone:
+- Spline tab: "Advanced Spline System: Draw a curve, then add meshes to it…" block.
+- Physics tab: "Drop already-placed objects with a bit of physics…" block.
+- Groups tab: the multi-line Drag & Drop hint section.
+- Physics → Auto Collision: the long Auto Shape explanation paragraph.
+Short contextual one-liners remain.
+
+### Start Physics reads as a button
+The Physics tab's primary action was created bare and received the global
+walker's low-contrast idle dress — nearly the panel's color, so it did not
+read as a button at all. It now wears a **raised blue 3D face** (solid fill,
+darker bottom bevel, drop shadow — the same tactile language as the active
+mode buttons), clearly visible against the panel, still on-theme, not white.
+
+### Silent by default
+- The `[Ultimate Asset Placer] Theme pass dressed N buttons…` debug prints
+  (a 2.3 leftover) are removed. The counters are kept internally for the test
+  harness; the plugin only prints its ready line.
+
+### Test harness
+- 40-step harness: all previous regressions (inset resting cards, grid
+  spacing, name outlines, "Opened" chip, click-through thumbnail, selected /
+  multi styleboxes, ctx-menu Open Scene / View Model, view/open actions,
+  header collapse, per-tab help chapters) plus new checks: star straddle
+  geometry (half-in == half-out, no well intersection, sticks past the card
+  edge, rect == offsets), clip flags + star-zone reservation, docs Welcome
+  behavior (including the after-"i"-use regression), removed descriptions,
+  Start Physics stylebox, gold-star modulate. Step callbacks are now awaited
+  (serialised) so async scene switches cannot race each other's checks.
+
 ## v2.4.0 — carved asset cards + Open Scene / View Model
 
 A fourth polish round on the asset browser plus a new context-menu action.

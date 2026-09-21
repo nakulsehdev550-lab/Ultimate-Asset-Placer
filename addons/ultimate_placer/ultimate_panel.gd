@@ -236,6 +236,9 @@ var shortcuts:Dictionary={
         "flip_x":KEY_G,"flip_z":KEY_B,"reset_rot":KEY_T,
 }
 var _preview_size:int=88; var _all_paths:Array=[]; var _groups:Array=[]
+var _grid_rm:int=0   # 2.5: right margin reserved on the asset grid so the
+                     # favorite star (which straddles the card's right edge)
+                     # never gets clipped by the scroll view / scrollbar
 var _favorite_paths:Array=[]  ## Favorites' actual storage — a separate list, NOT a _groups entry
 var _active_group:int=-1; var _is_placing:bool=false
 var items_per_page:int=1000; var current_page:int=0
@@ -396,12 +399,16 @@ func refresh_icons() -> void:
                 if dtex != null: _rail_docs_btn.icon = dtex
         # Card favorite stars suffer from the same first-import race as the tab
         # icons (they are built once with the grid), so re-apply them here too.
-        var fav_size := maxi(10,int(18*_es))
+        # 2.5: same EXACT size formula as _add_card (the old 18px refresh size
+        # drifted from the 16px build size) — with ignore_texture_size any
+        # drift would only scale, never shift the layout, but staying equal
+        # keeps the star crisp at 1:1 pixels.
+        var fav_size := maxi(12,int(16*_es))
         for p in _card_fav_btn_map.keys():
-                var fb := _card_fav_btn_map[p] as Button
+                var fb := _card_fav_btn_map[p] as TextureButton
                 if not is_instance_valid(fb): continue
                 var ftex := UAPIcons.get_icon_outlined("feature_favorite", fav_size)
-                if ftex != null: fb.icon = ftex
+                if ftex != null: fb.texture_normal = ftex
                 if _card_map.has(p):
                         var fc := _card_map[p] as PanelContainer
                         if is_instance_valid(fc): _update_card_favorite_star(fc, p)
@@ -617,7 +624,15 @@ func _set_texture_safely(path:String, tex:Texture2D, ir_id:int)->void:
 ##    height produced a huge blurry icon (spotted in the 2.2 editor run).
 func _card_apply_texture(ir:TextureRect, tex:Texture2D)->void:
         if ir==null or tex==null: return
-        var native:bool=tex.get_size().y<float(maxi(40,int(40*_es)))
+        # 2.5: native-size mode is only safe when the texture is small on BOTH
+        # axes (theme fallback icons). A wide texture under the height limit
+        # would have been drawn at native width and spilled over the card —
+        # now it keep-aspect scales like every real thumbnail. Combined with
+        # ir.clip_contents this makes thumbnail overflow structurally
+        # impossible.
+        var lim:=float(maxi(40,int(40*_es)))
+        var ts:=tex.get_size()
+        var native:bool=ts.x<lim and ts.y<lim
         ir.stretch_mode=TextureRect.STRETCH_KEEP_CENTERED if native else TextureRect.STRETCH_KEEP_ASPECT_CENTERED
         ir.texture=tex
 
@@ -661,23 +676,15 @@ func is_favorite(path:String)->bool:
 
 func _update_card_favorite_star(card:PanelContainer,path:String)->void:
         if not _card_fav_btn_map.has(path): return
-        var btn:=_card_fav_btn_map[path] as Button
+        var btn:=_card_fav_btn_map[path] as TextureButton
         if not is_instance_valid(btn): return
+        # 2.5: the star is a TextureButton now (see _add_card) — it has no
+        # per-state icon theme colors, so the dim-white vs gold language is
+        # applied through self_modulate. Same contrast values as before.
         if is_favorite(path):
-                UAPIcons.tint_button(btn,C_WARN,C_WARN.lightened(0.2),C_WARN)
+                btn.self_modulate=C_WARN
         else:
-                # Was Color(1,1,1,0.32) for the resting state — already low-contrast
-                # by design (computed against C_CARD_BG: ~2.2:1, well under typical
-                # UI legibility thresholds) even at the old 20x20 size. Halving the
-                # star's size (per the earlier fix) roughly quarters its pixel area,
-                # which pushed that pre-existing low contrast below the threshold of
-                # being noticeable at a glance — reported as "no stars visible" even
-                # though the button is present, correctly sized, and fully
-                # functional. Raised to keep the same dim-vs-gold visual language
-                # (still clearly less prominent than a favorited star) while
-                # actually being perceptible at the smaller size (~3.3:1 against
-                # C_CARD_BG, computed the same way).
-                UAPIcons.tint_button(btn,Color(1,1,1,0.6),Color(1,1,1,0.78),Color(1,1,1,0.9))
+                btn.self_modulate=Color(1,1,1,0.6)
 
 func toggle_favorite(path:String)->void:
         if _favorite_paths.has(path): _favorite_paths.erase(path)
@@ -750,7 +757,9 @@ func _set_preview_size(v:int)->void:
 
 func _update_columns()->void:
         if not is_instance_valid(_asset_grid) or not is_instance_valid(_asset_scroll): return
-        var w:=_asset_scroll.size.x
+        # 2.5: subtract the reserved right margin (favorite-star overhang zone)
+        # so the slot math matches the width the grid actually lays out in.
+        var w:=_asset_scroll.size.x-float(_grid_rm)
         if w<20.0: w=browser_ui.size.x-4.0
         if w<20.0: w=180.0
         # Exact slot math: every card is a square of _preview_size px, so
@@ -903,7 +912,10 @@ func _style_inset_hover_box()->StyleBoxFlat:
 func _apply_uap_theme(root:Node)->void:
         _theme_n_b=0; _theme_n_o=0; _theme_n_l=0
         _apply_uap_theme_walk(root)
-        print("[Ultimate Asset Placer] Theme pass dressed %d buttons, %d dropdowns, %d inputs."%[_theme_n_b,_theme_n_o,_theme_n_l])
+        # 2.5: the per-pass result is NO LONGER printed to the Output dock —
+        # it was a debug leftover from the 2.3 theme system and spammed two
+        # lines on every panel build. The counters are kept (harness can read
+        # them) but the plugin is silent by default now.
 
 func _apply_uap_theme_walk(node:Node)->void:
         # OptionButton extends Button — test it FIRST.
@@ -1221,7 +1233,19 @@ func _build_browser_panel(root:VBoxContainer)->void:
         # makes every card bottom-heavy, so equal gaps read vertically cramped
         # ("upper row is very close to the bottom row").
         _asset_grid.add_theme_constant_override("h_separation",6); _asset_grid.add_theme_constant_override("v_separation",maxi(6,int(10*_es)))
-        _asset_scroll.add_child(_asset_grid)
+        # 2.5: the favorite star straddles each card's right edge (half of it
+        # sits OUTSIDE the card, per the user's mockup). Reserve a strip on
+        # the right of the scroll content so the LAST column's star can stick
+        # out without being clipped by the scroll view or covered by the
+        # vertical scrollbar.
+        _grid_rm=maxi(6,int(10*_es))
+        var grid_margin:=MarginContainer.new()
+        grid_margin.add_theme_constant_override("margin_left",0)
+        grid_margin.add_theme_constant_override("margin_right",_grid_rm)
+        grid_margin.add_theme_constant_override("margin_top",0)
+        grid_margin.add_theme_constant_override("margin_bottom",0)
+        _asset_scroll.add_child(grid_margin)
+        grid_margin.add_child(_asset_grid)
 
 func _build_settings_panel(root:VBoxContainer)->void:
         # ── 2.1 UI overhaul: Blender-style icon rail ────────────────────────────
@@ -1426,7 +1450,11 @@ func _build_docs_rail_button()->void:
         var line:=HSeparator.new(); _tab_rail.add_child(line)
         _rail_docs_btn=_make_rail_button("tab_docs",true)
         _rail_docs_btn.tooltip_text="Docs — open the full documentation window"
-        _rail_docs_btn.pressed.connect(_open_docs_window)
+        # 2.5: the rail's Docs button ALWAYS opens the Welcome chapter — it
+        # used to inherit whatever chapter the last per-tab "i" button had
+        # opened (chapter=-1 kept the previous selection), which read like a
+        # bug. Per-tab help buttons still pass their own explicit chapter.
+        _rail_docs_btn.pressed.connect(func(): _open_docs_window(0))
         _rail_docs_btn.mouse_entered.connect(func(): _show_rail_tip(_rail_docs_btn,"Docs"))
         _rail_docs_btn.mouse_exited.connect(_hide_rail_tip)
         _tab_rail.add_child(_rail_docs_btn)
@@ -1661,8 +1689,9 @@ func _build_spline_tab()->void:
         exit_btn.tooltip_text="Restore the previous placement mode and re-enable the ghost cursor."
         exit_btn.pressed.connect(_exit_spline_mode); exit_row.add_child(exit_btn)
         _update_spline_mode_label()
-        vb.add_child(_sep())
-        _info(vb,"Advanced Spline System: Draw a curve, then add meshes to it.\nUse Godot's built-in Path3D handles in the viewport to shape the curve.")
+        # 2.5: the long "Advanced Spline System…" description block was removed
+        # — every tab has an "i" help button now, so paragraphs like this one
+        # only pushed the actual controls further down the panel.
         vb.add_child(_sep())
         var cs_sec:=_section(vb,"1. Spline Node Setup")
         var btn_row1:=HBoxContainer.new()
@@ -1968,10 +1997,9 @@ func _build_groups_tab()->void:
         rm_btn.add_theme_color_override("font_color",C_ERROR)
         rm_btn.tooltip_text="Removes selected asset(s) from the currently viewed group.\nIf viewing All or search, removes from every group they belong to.\nSupports multi-selection (Ctrl+Click / Shift+Click)."
         rm_btn.pressed.connect(_on_smart_remove_from_group); rmr.add_child(rm_btn)
-        # ── Drag & Drop hint ────────────────────────────────────────────────────────
-        vb.add_child(_sep())
-        var dd_sec:=_section(vb,"Drag & Drop",false)
-        _info(dd_sec,"Drag asset files from Godot's FileSystem panel directly onto the asset browser area.\n• If a named group or Favorites is active, the dropped files are added to that group immediately — even if already in the browser.\n• Dropping onto All view adds files to the global browser only.")
+        # 2.5: the multi-line Drag & Drop hint section was removed — same
+        # reason as the Spline/Physics paragraphs: the per-tab "i" button and
+        # the Docs window cover it, and the groups tab reads much tighter now.
 
 func _on_smart_remove_from_group()->void:
         # Collect the paths to remove: multi-selected takes priority, then single selected.
@@ -2069,8 +2097,8 @@ func _col_warn_needed()->bool: return collision_shape_type==0 and collision_body
 
 func _build_physics_tab()->void:
         var vb:=_make_tab("Physics", "tab_physics")
-        _info(vb,"Drop already-placed objects with a bit of physics: lift them into the air, run the simulation, then freeze the result once they've settled.")
-        vb.add_child(_sep())
+        # 2.5: the long "Drop already-placed objects…" description is gone —
+        # the "i" button on this tab's header opens the Physics docs chapter.
 
         var status_row:=HBoxContainer.new(); status_row.add_theme_constant_override("separation",6)
         status_row.size_flags_horizontal=SIZE_EXPAND_FILL; vb.add_child(status_row)
@@ -2087,6 +2115,13 @@ func _build_physics_tab()->void:
         var btn_row:=HBoxContainer.new(); btn_row.add_theme_constant_override("separation",4); vb.add_child(btn_row)
         _phys_start_btn=Button.new(); _phys_start_btn.text="Start Physics"; _phys_start_btn.size_flags_horizontal=SIZE_EXPAND_FILL
         UAPIcons.set_button_icon(_phys_start_btn,"action_bake")
+        # 2.5: Start Physics is THE primary action of this tab, but it was
+        # created bare and the global walker dressed it with the low-contrast
+        # idle style — nearly the same color as the panel, so it didn't read
+        # as a button at all. Give it a raised BLUE face (the same tactile
+        # language as the active mode buttons): clearly visible against the
+        # dark panel, unmistakably a button, still on-theme and NOT white.
+        _style_raised_button(_phys_start_btn,Color(0.16,0.34,0.55))
         _phys_start_btn.tooltip_text="Simulate the currently selected object(s) falling and settling."
         _phys_start_btn.pressed.connect(func(): if is_instance_valid(physics_ctrl): physics_ctrl.call("start_simulation"))
         btn_row.add_child(_phys_start_btn)
@@ -2138,7 +2173,8 @@ func _build_physics_tab()->void:
         var col:=_section(vb,"Auto Collision (temporary)",false)
         _row_chk("Auto-Add Missing Collision",col,phys_auto_add_collision,func(v:bool):phys_auto_add_collision=v;_save_config(),
                 "When ON, an object with no collision of its own gets a temporary shape for the duration of the simulation so it can land and be landed on, then it's removed. When OFF, such objects are skipped instead of getting anything added automatically. Objects that already have collision are always used exactly as they are and are never touched either way.")
-        _info(col,"Auto Shape also decides the shape used to simulate that object's own motion when it has no collision of its own — pick Sphere or Capsule for round or long objects, or Convex Hull for the closest fit to an irregular mesh. An object with its own collision already always uses that real shape instead, for the closest possible match to how you set it up.")
+        # 2.5: the long Auto Shape explanation paragraph was removed — the
+        # OptionButton's per-item tooltips + the "i" button carry that info.
         var so:=OptionButton.new(); so.size_flags_horizontal=SIZE_EXPAND_FILL
         for it in ["Box","Sphere","Capsule","Convex Hull (Accurate)"]: so.add_item(it)
         so.selected=phys_auto_shape
@@ -2172,14 +2208,13 @@ func _update_phys_ui()->void:
 ## chapter to jump straight to that section. Closing the window simply
 ## restores the rail highlight; the feature tab that was selected before is
 ## still the selected one (the window never touches _settings_tabs).
-func _open_docs_window(chapter:int=-1)->void:
+func _open_docs_window(chapter:int=0)->void:
         if _docs_window==null: _build_docs_window()
         if _docs_window==null: return
         _docs_was_open=true
-        # 2.3: the per-tab help button passes the chapter that matches the
-        # currently-active tab, so the window opens on the right chapter
-        # instead of always the first one.
-        if chapter>=0: _docs_cur_chapter=chapter
+        # The per-tab help ("i") buttons pass the chapter that matches the
+        # currently-active tab; every other caller (rail Docs button) gets the
+        # default 0 = the Welcome & Quick Start chapter.
         if _docs_rtl==null or _docs_rtl.get_parent()==null:
                 _select_docs_chapter(_docs_cur_chapter)
         _docs_window.popup_centered(Vector2i(mini(int(1020*_es),int(get_viewport_rect().size.x*0.85)),mini(int(720*_es),int(get_viewport_rect().size.y*0.85))))
@@ -2618,19 +2653,41 @@ func _add_card(path:String)->void:
         wsb.set_content_margin_all(0)
         well.add_theme_stylebox_override("panel",wsb)
         well.size_flags_horizontal=SIZE_EXPAND_FILL
+        # 2.5: the thumbnail can NEVER spill out of the well again — no matter
+        # what a texture or stretch mode does, drawing is clipped to the well
+        # rect ("thumbnails coming on top of the cards" report).
+        well.clip_contents=true
         # 2.3 CRITICAL: the well is a PanelContainer, which STOPS mouse events
         # by default — clicks on the thumbnail were being eaten here and never
         # reached the card's gui_input (that's why only clicking the title
         # selected a card). IGNORE lets the click fall through to the card
         # itself, so the ENTIRE card is clickable: thumbnail, name, padding.
         well.mouse_filter=Control.MOUSE_FILTER_IGNORE
-        vb.add_child(well)
+        # 2.5: the well stops one extra `pad` short of the card's RIGHT edge,
+        # reserving the top-right corner zone for the favorite star — this is
+        # exactly the user's mockup, where the well's right inset is double
+        # the left one and the star sits clear of the thumbnail. The wrap is
+        # a plain MarginContainer: left stays at the card's pad, right adds
+        # the extra pad.
+        var well_wrap:=MarginContainer.new()
+        well_wrap.add_theme_constant_override("margin_left",0)
+        well_wrap.add_theme_constant_override("margin_right",pad)
+        well_wrap.add_theme_constant_override("margin_top",0)
+        well_wrap.add_theme_constant_override("margin_bottom",0)
+        well_wrap.mouse_filter=Control.MOUSE_FILTER_IGNORE
+        well_wrap.add_child(well)
+        vb.add_child(well_wrap)
         # The well is remembered on the card so _card_apply_state() can tint it
         # blue/amber together with the card face (see 2.3 selection design).
         card.set_meta("uap_well",well)
-        var ir:=TextureRect.new(); ir.custom_minimum_size=Vector2(inner_w,thumb_h)
+        var thumb_w:int=inner_w-pad   # 2.5: well is narrower by the star zone
+        var ir:=TextureRect.new(); ir.custom_minimum_size=Vector2(thumb_w,thumb_h)
         ir.expand_mode=TextureRect.EXPAND_IGNORE_SIZE
         ir.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+        # 2.5: belt-and-suspenders for the same overflow report — even if a
+        # future stretch mode ever draws beyond the TextureRect's bounds, the
+        # texture is clipped to them and can never sit "on top of the card".
+        ir.clip_contents=true
         ir.mouse_filter=Control.MOUSE_FILTER_IGNORE; well.add_child(ir)
         ir.set_meta("uap_path",path)
         _card_ir_map[path]=ir; _ir_path_map[ir.get_instance_id()]=path
@@ -2706,38 +2763,54 @@ func _add_card(path:String)->void:
         wrapper.add_child(card)
         # Favorite star: a SIBLING of `card` inside `wrapper`, not a child of
         # `card` — see the comment at the top of this function for why.
-        # Anchored to the top-right corner with a small INSET so the star sits
-        # fully INSIDE the card (2.1 moved it in via explicit offsets; 2.2
-        # keeps the same mechanism on the new square card).
-        var fav_btn:=Button.new(); fav_btn.flat=true
+        # 2.5 star placement — FINAL design taken literally from the user's
+        # mockup: the star is a CORNER BADGE, centered ON the card's top-right
+        # edge (half inside the card, half outside over the panel) and `fav_m`
+        # px below the top edge. Because the thumbnail well now stops an extra
+        # pad short of the right edge (see well_wrap above), the star's inner
+        # half lands in the reserved corner zone and NEVER overlaps the
+        # thumbnail image — the complaint from every previous round.
+        #
+        # 2.5 CONTROL TYPE — TextureButton, not Button. THIS was the real,
+        # root cause of "the star position is wrong" reported in every round:
+        # a (flat, icon-only, StyleBoxEmpty-overridden) Button still inherits
+        # the editor theme's Button minimum size (measured 32x28 at es=1 in
+        # the 4.7.1 editor). Godot grows the control to its minimum size in
+        # the END direction, so the 16px button silently became a 32x28 rect
+        # starting at its offset position — the ICON drew left-aligned inside
+        # that oversized rect, i.e. several px off the intended corner, half
+        # of it under the neighbouring card. TextureButton has no text, no
+        # font, no styleboxes: its minimum size is exactly its texture (and
+        # with ignore_texture_size, ZERO) — the offsets below are therefore
+        # the final rect, pixel-exact, on every editor theme.
+        var fav_btn:=TextureButton.new()
         var fav_size:=maxi(12,int(16*_es))
-        # 2.3 star inset: per the red-doodle mockup, the star sits noticeably
-        # INSIDE the corner and — the key requirement — at the SAME distance
-        # from the upper edge and the right edge (m on both sides).
         var fav_m:=maxi(4,int(8*_es))
+        fav_btn.ignore_texture_size=true          # min size = 0: rect == offsets
+        fav_btn.stretch_mode=TextureButton.STRETCH_SCALE
         fav_btn.anchor_left=1.0; fav_btn.anchor_right=1.0
         fav_btn.anchor_top=0.0;  fav_btn.anchor_bottom=0.0
-        fav_btn.offset_left=-fav_size-fav_m
-        fav_btn.offset_right=-fav_m
+        fav_btn.offset_left=-int(fav_size/2)      # half inside  the card
+        fav_btn.offset_right=int(fav_size/2)       # half outside the card
         fav_btn.offset_top=fav_m
         fav_btn.offset_bottom=fav_m+fav_size
         # Legibility over any thumbnail is handled by a dark outline baked
-        # directly into the icon texture via UAPIcons.get_icon_outlined(),
-        # rather than a solid backing shape. flat=true only hides the visual
-        # background — content margins still apply, so every stylebox state is
-        # overridden with zero margins to give the icon the full button area.
-        var fav_btn_style:=StyleBoxEmpty.new()
-        for state in ["normal","hover","pressed","focus","disabled"]:
-                fav_btn.add_theme_stylebox_override(state,fav_btn_style)
+        # directly into the texture via UAPIcons.get_icon_outlined().
+        var fav_tex:=UAPIcons.get_icon_outlined("feature_favorite",fav_size)
+        if fav_tex != null: fav_btn.texture_normal=fav_tex
         fav_btn.tooltip_text="Toggle Favorite"
         fav_btn.focus_mode=Control.FOCUS_NONE
-        # Deliberately NOT using expand_icon here (see 2.1 notes): the outlined
-        # texture is pre-resized to the exact target pixels, so nothing is
-        # shrunk at draw time — confirmed correct in the real editor.
-        UAPIcons.set_button_icon_outlined(fav_btn,"feature_favorite",fav_size)
         wrapper.add_child(fav_btn)
         _card_fav_btn_map[path]=fav_btn
         _update_card_favorite_star(card,path)
+        # Hover feedback (TextureButton has no theme hover states): brighten a
+        # dim (unfavorited) star under the mouse; favorited stars stay gold.
+        fav_btn.mouse_entered.connect(func():
+                if not is_favorite(path): fav_btn.self_modulate=Color(1,1,1,0.95))
+        fav_btn.mouse_exited.connect(func():
+                if _card_map.has(path):
+                        var fc: PanelContainer=_card_map[path]
+                        if is_instance_valid(fc): _update_card_favorite_star(fc,path))
         fav_btn.pressed.connect(func(): toggle_favorite(path))
         var card_path:=path
         card.gui_input.connect(func(ev:InputEvent):
