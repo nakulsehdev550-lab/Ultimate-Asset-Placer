@@ -2,7 +2,7 @@
 
 **Professional 3D asset placement tool for Godot 4.7+** — place, paint, scatter, spline, and physics-drop your assets with a fast, tactile editor UI. Optimised for thousands of assets.
 
-![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.2.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.3.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ![Ultimate Asset Placer in the Godot editor](screenshots/editor_overview.png)
 
@@ -17,6 +17,26 @@
 - **Material override & auto collision** — Replace/Next-Pass materials, Static/Rigid/Character/Area bodies with five shape types.
 - **Physics tab** — lift, drop, tumble and settle existing scene objects entirely inside the editor.
 - **Asset Zoo** — lays out your whole library in a 3D grid for inspection.
+
+## What's new in v2.3.0 — borderless cards, whole-card clicks, per-tab help
+
+### Resting cards: no outline, period
+Unselected asset cards are now a **clean solid dark surface with nothing drawn around them** — the thin border (and the "open scene" amber ring) are gone. The thumbnail sits on its carved dark well; nothing else competes for attention.
+
+### Click anywhere on a card
+Clicking a card's **thumbnail now selects it** — previously only the name row worked because the thumbnail well silently swallowed mouse clicks. Thumbnail, name or padding: the entire card is one big click target.
+
+### Selection that reads around the thumbnail
+- **Single selection** — the whole card raises in **blue 3D** (solid face, darker bottom bevel, drop shadow) and the **thumbnail well is tinted blue**, so the highlight wraps the image.
+- **Multi-selection (Ctrl/Shift)** — the same raised 3D treatment in **amber**, with an amber-tinted well. No more flat highlight box.
+
+![Selection states](screenshots/asset_cards.png)
+
+### Help (i) button on every tab title bar
+The tab-name bar now carries an **info button** that opens the documentation window **directly at that tab's chapter** — Place opens "Place Tab", Groups opens "Groups & Favorites", and so on.
+
+### Every last bright control re-themed
+A new global dressing pass sweeps the entire panel and themes anything the explicit styles missed: **Create Asset Zoo**, the Zoo **Source dropdown** (and its popup list), the group dropdown, key rebinding controls, LineEdits — the whole panel now speaks one visual language.
 
 ## What's new in v2.2.0 — polish pass
 
@@ -81,7 +101,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete, detailed change history.
 ## Installation
 
 ### Option A — from a release zip
-1. Download `ultimate_asset_placer_v2.2.0.zip` from the [Releases](../../releases) page.
+1. Download `ultimate_asset_placer_v2.3.0.zip` from the [Releases](../../releases) page.
 2. Extract it into your project folder so you end up with `res://addons/ultimate_placer/`.
 3. Open **Project → Project Settings → Plugins** and enable **Ultimate Asset Placer**.
 4. The **Asset Browser** appears as a bottom panel and the **settings panel** docks to the right.
@@ -118,7 +138,7 @@ Tip: switch the scroll wheel target with the blue buttons (Scale, Rot Y/X/Z, Hei
 
 ## Documentation
 
-The full manual ships inside the plugin — click the **Docs** button at the bottom of the left rail (the book icon). It covers every setting, all keyboard shortcuts, six workflow walkthroughs, performance notes, and a troubleshooting FAQ.
+The full manual ships inside the plugin — click the **Docs** button at the bottom of the left rail (the book icon) or the **(i) button on any tab's title bar** to jump straight to that tab's chapter. It covers every setting, all keyboard shortcuts, six workflow walkthroughs, performance notes, and a troubleshooting FAQ.
 
 ## System requirements
 

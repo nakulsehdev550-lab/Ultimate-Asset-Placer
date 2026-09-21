@@ -1,5 +1,48 @@
 # Ultimate Asset Placer — Changelog
 
+## v2.3.0 — selection & click pass (borderless cards, whole-card clicks, per-tab help)
+
+A third polish round driven by hands-on feedback. Verified against a **real
+Godot 4.7.1 editor** with a 36-step automated harness: zero script errors,
+zero audit fails, and fresh screenshots of every affected view.
+
+### Fixed / changed
+- **Resting asset cards have NO outline at all.** The thin 1 px border (and
+  the "open scene" card's amber ring) are gone — unselected cards are now a
+  clean, solid, flat dark surface with nothing drawn around them.
+- **The whole card is clickable.** Previously only the name row selected a
+  card: the thumbnail well (a PanelContainer) silently swallowed mouse clicks
+  before they reached the card. The well is now click-transparent, so
+  clicking ANYWHERE on a card — thumbnail, name, or padding — selects it.
+  Verified in the running editor with a synthetic click on the thumbnail.
+- **Blue selection now wraps the thumbnail.** Selecting a card still raises
+  the whole card in blue 3D (solid face, darker bottom bevel, drop shadow),
+  and the thumbnail well is now tinted blue as well, so the highlight reads
+  around the image instead of only on the name row.
+- **Multi-select got its 3D effect.** Ctrl/Shift-selected cards use the same
+  raised treatment in amber — solid amber face, darker bottom bevel, drop
+  shadow — plus an amber-tinted thumbnail well. The old flat bordered box is
+  gone.
+- **Favorite star positioned per the mockup.** The star now sits noticeably
+  inside the corner at exactly the SAME distance from the upper edge and the
+  right edge (verified programmatically on every card).
+- **Create Asset Zoo, every remaining dropdown, and every remaining button
+  now match the redesign.** A new global dressing pass sweeps the whole panel
+  at startup and themes any bare Button in the flat dark style, any
+  OptionButton with the carved dark container + themed popup list, and any
+  LineEdit with the carved-in dark input style. This caught the "Create Asset
+  Zoo" button, the Zoo "Source" dropdown (and its bright popup), the group
+  dropdown, key rebinding controls and more — 89 buttons, 8 dropdowns and 4
+  inputs dressed in the default demo project.
+- **Help (i) button on every tab title bar.** The carved bar that shows the
+  active tab's name now carries an info button on the right end. Clicking it
+  opens the documentation window directly at the chapter for THAT tab (Place
+  → "Place Tab", Groups → "Groups & Favorites", Collision → "Material &
+  Collision", etc.). The rail's Docs button still opens the chapter browser.
+
+### Internal
+- Version bumped to 2.3.0 (plugin.cfg, README).
+
 ## v2.2.0 — UI polish pass ("carved" groups, square cards, smarter collapse)
 
 A refinement pass over the v2.1 UI, driven by hands-on feedback from a real

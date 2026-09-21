@@ -280,6 +280,18 @@ const S_INSET_ACTIVE_BG    := Color(0.085,0.190,0.310)
 const S_INSET_ACTIVE_EDGE  := Color(0.030,0.068,0.115)
 const S_SECTION_BG   := Color(0.098,0.105,0.138)
 const S_SECTION_LINE := Color(0.024,0.027,0.038)
+# 2.3 card states: the thumbnail WELL is tinted to match the card's active
+# state, so the blue/amber 3D selection reads around the thumbnail too
+# instead of only on the name row at the bottom.
+const C_WELL_BG      := Color(0.098,0.105,0.138)   # resting (same as sections)
+const C_WELL_SEL     := Color(0.125,0.235,0.360)   # single-select: blue-tinted
+const C_WELL_MULTI   := Color(0.330,0.245,0.090)   # multi-select: amber-tinted
+# Tab → docs chapter (order = TabContainer page order):
+# Place→"Place Tab", Transform→"Transform Tab", Paint→"Paint Tab",
+# Spline→"Spline Tab", Material→"Material & Collision",
+# Groups→"Groups & Favorites", Keys→"Keys & Shortcuts",
+# Collision→"Material & Collision", Physics→"Physics Tab".
+const TAB_DOCS_CHAPTER := [4,5,6,7,8,10,11,8,9]
 
 var settings_ui:VBoxContainer=null; var browser_ui:VBoxContainer=null
 var _search_panel:VBoxContainer=null; var _folder_edit:LineEdit=null
@@ -295,6 +307,9 @@ var _multisel_bar:HBoxContainer=null; var _multisel_lbl:Label=null
 var _multisel_group_opt:OptionButton=null
 # 2.2: tab-name header + instant rail hover-name
 var _tab_header_lbl:Label=null
+var _tab_help_btn:Button=null
+# 2.3: global dressing-pass counters (reported once at startup).
+var _theme_n_b:int=0; var _theme_n_o:int=0; var _theme_n_l:int=0
 var _rail_tip_layer:Control=null; var _rail_tip_panel:PanelContainer=null; var _rail_tip_lbl:Label=null
 # 2.2: advanced header collapse — when collapsed, the group chip strip moves
 # INTO the title bar so every group stays one click away.
@@ -850,12 +865,14 @@ func _style_idle_button(btn:Button)->void:
         _apply_states(btn,_style_idle(),_style_idle_hover(),_style_idle_pressed())
         _clear_raised_text(btn)
         btn.focus_mode=Control.FOCUS_NONE
+        btn.set_meta("uap_styled",true)   # 2.3: marks the control for the global walker
 
 ## One-call dressing for an ACTIVE raised button in the given color.
 func _style_raised_button(btn:Button,color:Color,hover_lighten:float=0.08)->void:
         _apply_states(btn,_style_raised(color),_style_raised(color.lightened(hover_lighten)),_style_raised(color))
         _apply_raised_text(btn)
         btn.focus_mode=Control.FOCUS_NONE
+        btn.set_meta("uap_styled",true)   # 2.3: marks the control for the global walker
 
 ## One-call dressing for an inset chip (groups, format toggles).
 func _style_inset_button(btn:Button,active:Color=Color(0.80,0.85,0.92),inactive:Color=Color(0.62,0.65,0.73))->void:
@@ -866,9 +883,88 @@ func _style_inset_button(btn:Button,active:Color=Color(0.80,0.85,0.92),inactive:
         btn.add_theme_color_override("font_hover_pressed_color",Color(0.90,0.93,1.0))
         btn.add_theme_color_override("font_focus_color",inactive)
         btn.focus_mode=Control.FOCUS_NONE
+        btn.set_meta("uap_styled",true)   # 2.3: marks the control for the global walker
 
 func _style_inset_hover_box()->StyleBoxFlat:
         var sb:=_style_inset(false); sb.bg_color=S_INSET_HOVER; return sb
+
+# ─── 2.3 Global dressing pass ───────────────────────────────────────────────
+## The redesigned theme covers every control the build code styles EXPLICITLY
+## (mode/scroll buttons, rail, chips, sections…), but a handful of controls
+## were still created bare and therefore kept the bright default editor look
+## ("Create Asset Zoo", the Source dropdown, misc action buttons, LineEdits).
+## This walker dresses EVERY bare Button / OptionButton / LineEdit under the
+## panel in the carved dark language. Controls that already carry their own
+## stylebox overrides — or that opted out via the "uap_styled" meta — are
+## left untouched, so the raised/inset/flat designs all survive.
+func _apply_uap_theme(root:Node)->void:
+        _theme_n_b=0; _theme_n_o=0; _theme_n_l=0
+        _apply_uap_theme_walk(root)
+        print("[Ultimate Asset Placer] Theme pass dressed %d buttons, %d dropdowns, %d inputs."%[_theme_n_b,_theme_n_o,_theme_n_l])
+
+func _apply_uap_theme_walk(node:Node)->void:
+        # OptionButton extends Button — test it FIRST.
+        if node is OptionButton:
+                var ob:=node as OptionButton
+                if not ob.has_meta("uap_styled"):
+                        _style_option_button(ob); _theme_n_o+=1
+        elif node is Button:
+                var b:=node as Button
+                if not b.has_meta("uap_styled") and not b.has_theme_stylebox_override("normal"):
+                        _style_idle_button(b); _theme_n_b+=1
+        elif node is LineEdit:
+                var le:=node as LineEdit
+                if not le.has_meta("uap_styled"):
+                        _style_line_edit(le); _theme_n_l+=1
+        for c in node.get_children(): _apply_uap_theme_walk(c)
+
+## Dark carved style for the remaining bare buttons is _style_idle_button;
+## this adds the dropdown-specific pieces: text colors, arrow tint and a
+## themed popup list (the bright default PopupMenu was singled out in the
+## feedback screenshot as not fitting the redesign).
+func _style_option_button(ob:OptionButton)->void:
+        ob.set_meta("uap_styled",true)
+        _apply_states(ob,_style_idle(),_style_idle_hover(),_style_idle_pressed())
+        ob.add_theme_color_override("font_color",C_TEXT)
+        ob.add_theme_color_override("font_focus_color",C_TEXT)
+        ob.add_theme_color_override("font_hover_color",Color(0.92,0.95,1.0))
+        ob.add_theme_color_override("font_pressed_color",Color(0.95,0.97,1.0))
+        ob.add_theme_color_override("font_hover_pressed_color",Color(0.95,0.97,1.0))
+        ob.add_theme_color_override("font_disabled_color",Color(0.45,0.47,0.55))
+        # The arrow icon follows the Button icon-color overrides in Godot 4.
+        ob.add_theme_color_override("icon_normal_color",Color(0.60,0.63,0.72))
+        ob.add_theme_color_override("icon_hover_color",Color(0.90,0.93,1.0))
+        ob.add_theme_color_override("icon_pressed_color",Color(0.95,0.97,1.0))
+        ob.add_theme_color_override("icon_hover_pressed_color",Color(0.95,0.97,1.0))
+        ob.add_theme_color_override("icon_focus_color",Color(0.60,0.63,0.72))
+        ob.focus_mode=Control.FOCUS_NONE
+        var pop:=ob.get_popup()
+        if pop!=null: _style_popup_menu(pop)
+
+## Carved-in LineEdit: darker-than-panel fill, bottom edge line, no outline
+## ring; focus deepens the fill and turns the bottom line blue.
+func _style_line_edit(le:LineEdit)->void:
+        le.set_meta("uap_styled",true)
+        var n:=StyleBoxFlat.new(); n.bg_color=S_SECTION_BG; n.set_corner_radius_all(4)
+        n.border_width_bottom=maxi(1,int(2*_es)); n.border_color=S_SECTION_LINE
+        n.content_margin_left=int(7*_es); n.content_margin_right=int(7*_es)
+        n.content_margin_top=int(3*_es);  n.content_margin_bottom=int(3*_es)
+        var f:=StyleBoxFlat.new(); f.bg_color=S_INSET_BG; f.set_corner_radius_all(4)
+        f.border_width_bottom=maxi(1,int(2*_es)); f.border_color=Color(0.20,0.44,0.72)
+        f.content_margin_left=int(7*_es); f.content_margin_right=int(7*_es)
+        f.content_margin_top=int(3*_es);  f.content_margin_bottom=int(3*_es)
+        var ro:=StyleBoxFlat.new(); ro.bg_color=S_INSET_BG; ro.set_corner_radius_all(4)
+        ro.border_width_bottom=maxi(1,int(2*_es)); ro.border_color=S_SECTION_LINE
+        ro.content_margin_left=int(7*_es); ro.content_margin_right=int(7*_es)
+        ro.content_margin_top=int(3*_es);  ro.content_margin_bottom=int(3*_es)
+        le.add_theme_stylebox_override("normal",n)
+        le.add_theme_stylebox_override("focus",f)
+        le.add_theme_stylebox_override("read_only",ro)
+        le.add_theme_color_override("font_color",C_TEXT)
+        le.add_theme_color_override("font_placeholder_color",Color(0.50,0.52,0.60,0.55))
+        le.add_theme_color_override("font_readonly_color",Color(0.55,0.57,0.65))
+        le.add_theme_color_override("caret_color",C_ACCENT)
+        le.add_theme_color_override("selection_color",Color(0.28,0.62,1.0,0.35))
 
 func _section(parent:VBoxContainer, title:String, open:bool=true)->VBoxContainer:
         # 2.2 carved-in group design (shared with group chips/rows):
@@ -931,6 +1027,15 @@ func _build_ui()->void:
         _build_header(browser_ui); _build_browser_panel(browser_ui)
         _apply_header_collapsed()
         _build_mode_bar(settings_ui); settings_ui.add_child(_sep()); _build_settings_panel(settings_ui)
+        # 2.3: after every control exists, sweep the whole panel once and dress
+        # all bare buttons/dropdowns/line-edits in the redesigned theme (the
+        # "Create Asset Zoo" button and the Source dropdown were still bright
+        # editor-default before this pass).
+        # NOTE: settings_ui/browser_ui are deliberately NOT children of this
+        # node at build time — plugin.gd hands them to the dock system right
+        # after _ready — so the walk must start from BOTH roots explicitly.
+        _apply_uap_theme(settings_ui)
+        _apply_uap_theme(browser_ui)
 
 ## Applies _header_collapsed to the header block: version label, title text,
 ## the folder/search rows and the status bar hide when collapsed — while the
@@ -1132,16 +1237,33 @@ func _build_settings_panel(root:VBoxContainer)->void:
         var right:=VBoxContainer.new(); right.size_flags_horizontal=SIZE_EXPAND_FILL
         right.size_flags_vertical=SIZE_EXPAND_FILL; right.add_theme_constant_override("separation",int(5*_es))
         outer.add_child(right)
-        # Tab-name header: carved bar matching the section language.
+        # Tab-name header: carved bar matching the section language. 2.3 adds
+        # an info button on the right end that opens the docs chapter for the
+        # tab that is currently active.
         var thp:=PanelContainer.new(); thp.size_flags_horizontal=SIZE_EXPAND_FILL
         var tsb:=StyleBoxFlat.new(); tsb.bg_color=S_SECTION_BG; tsb.set_corner_radius_all(4)
         tsb.border_width_bottom=maxi(2,int(2*_es)); tsb.border_color=S_SECTION_LINE
-        tsb.content_margin_left=int(9*_es); tsb.content_margin_right=int(9*_es)
+        tsb.content_margin_left=int(9*_es); tsb.content_margin_right=int(6*_es)
         tsb.content_margin_top=int(4*_es); tsb.content_margin_bottom=int(4*_es)
         thp.add_theme_stylebox_override("panel",tsb); right.add_child(thp)
+        var th_hb:=HBoxContainer.new(); th_hb.size_flags_horizontal=SIZE_EXPAND_FILL
+        th_hb.add_theme_constant_override("separation",int(6*_es)); thp.add_child(th_hb)
         _tab_header_lbl=Label.new(); _tab_header_lbl.text="Place"
+        _tab_header_lbl.size_flags_horizontal=SIZE_EXPAND_FILL
         _tab_header_lbl.add_theme_color_override("font_color",C_HEAD)
-        thp.add_child(_tab_header_lbl)
+        th_hb.add_child(_tab_header_lbl)
+        _tab_help_btn=Button.new(); _tab_help_btn.flat=true
+        _tab_help_btn.focus_mode=Control.FOCUS_NONE
+        _tab_help_btn.custom_minimum_size=Vector2(int(20*_es),int(20*_es))
+        UAPIcons.set_button_icon_sized(_tab_help_btn,"status_info",maxi(10,int(15*_es)))
+        _tab_help_btn.add_theme_color_override("icon_normal_color",Color(0.60,0.63,0.72))
+        _tab_help_btn.add_theme_color_override("icon_hover_color",Color(0.95,0.97,1.0))
+        _tab_help_btn.add_theme_color_override("icon_pressed_color",Color(1,1,1))
+        _tab_help_btn.add_theme_color_override("icon_focus_color",Color(0.95,0.97,1.0))
+        _tab_help_btn.set_meta("uap_styled",true)   # keep the global walker's hands off this flat button
+        _tab_help_btn.pressed.connect(func(): _open_docs_window(_chapter_for_active_tab()))
+        _tab_help_btn.tooltip_text="Open the docs chapter for this tab"
+        th_hb.add_child(_tab_help_btn)
         _settings_tabs=TabContainer.new(); _settings_tabs.size_flags_horizontal=SIZE_EXPAND_FILL
         _settings_tabs.size_flags_vertical=SIZE_EXPAND_FILL; _settings_tabs.clip_contents=true
         _settings_tabs.custom_minimum_size=Vector2(0,int(80*_es))
@@ -1280,6 +1402,17 @@ func _refresh_tab_rail()->void:
                 else: _dim_rail_button(btn)
         if is_instance_valid(_tab_header_lbl) and is_instance_valid(_settings_tabs) and cur<_settings_tabs.get_tab_count():
                 _tab_header_lbl.text=_settings_tabs.get_tab_title(cur)
+                # Keep the header info button's tooltip on the ACTIVE tab.
+                if is_instance_valid(_tab_help_btn):
+                        _tab_help_btn.tooltip_text="Help — open the docs chapter for the %s tab"%_settings_tabs.get_tab_title(cur)
+
+## 2.3: chapter index in uap_docs.get_chapters() that documents the tab that
+## is currently active (mapping table TAB_DOCS_CHAPTER, page order aligned).
+func _chapter_for_active_tab()->int:
+        if not is_instance_valid(_settings_tabs): return 0
+        var cur:int=_settings_tabs.current_tab
+        if cur<0 or cur>=TAB_DOCS_CHAPTER.size(): return 0
+        return TAB_DOCS_CHAPTER[cur]
 
 func _build_docs_rail_button()->void:
         if not is_instance_valid(_tab_rail): return
@@ -2033,13 +2166,18 @@ func _update_phys_ui()->void:
 ## chapter to jump straight to that section. Closing the window simply
 ## restores the rail highlight; the feature tab that was selected before is
 ## still the selected one (the window never touches _settings_tabs).
-func _open_docs_window()->void:
+func _open_docs_window(chapter:int=-1)->void:
         if _docs_window==null: _build_docs_window()
         if _docs_window==null: return
         _docs_was_open=true
+        # 2.3: the per-tab help button passes the chapter that matches the
+        # currently-active tab, so the window opens on the right chapter
+        # instead of always the first one.
+        if chapter>=0: _docs_cur_chapter=chapter
         if _docs_rtl==null or _docs_rtl.get_parent()==null:
                 _select_docs_chapter(_docs_cur_chapter)
         _docs_window.popup_centered(Vector2i(mini(int(1020*_es),int(get_viewport_rect().size.x*0.85)),mini(int(720*_es),int(get_viewport_rect().size.y*0.85))))
+        if chapter>=0: _select_docs_chapter(chapter)
         if is_instance_valid(_rail_docs_btn):
                 _rail_docs_btn.set_pressed_no_signal(true)
                 _raise_rail_button(_rail_docs_btn)
@@ -2446,20 +2584,23 @@ func _add_card(path:String)->void:
         # its own small rect and actually stick.
         var S:int=_preview_size
         var pad:int=maxi(3,int(4*_es))          # inner padding inside the card
-        var bd:int=1                            # card border width
         var sep:int=maxi(2,int(3*_es))          # gap thumb↔name
         var lbl_h:int=maxi(14,int(17*_es))      # name row height
-        var inner_w:int=S-2*(pad+bd)
-        var thumb_h:int=S-2*(pad+bd)-lbl_h-sep  # exact square budget: no overflow
+        var inner_w:int=S-2*pad
+        var thumb_h:int=S-2*pad-lbl_h-sep       # exact square budget: no overflow
         var wrapper:=Control.new()
         wrapper.custom_minimum_size=Vector2(S,S)   # SQUARE cell
         wrapper.mouse_filter=Control.MOUSE_FILTER_IGNORE
         var card:=PanelContainer.new()
         card.set_anchors_preset(Control.PRESET_FULL_RECT)
         card.mouse_filter=Control.MOUSE_FILTER_STOP
+        # 2.3 resting card face: SOLID dark fill, absolutely NO outline on any
+        # side (the 1px neutral border read as "vibe-coded" per feedback). The
+        # card is just a clean flat surface; the thumbnail well inside is the
+        # only darker area, exactly like the carved sections elsewhere.
         var normal_style:=StyleBoxFlat.new(); normal_style.bg_color=C_CARD_BG
-        normal_style.set_corner_radius_all(5); normal_style.set_border_width_all(bd)
-        normal_style.border_color=C_CARD_BD
+        normal_style.set_corner_radius_all(5)
+        normal_style.set_border_width_all(0)
         normal_style.content_margin_left=pad; normal_style.content_margin_right=pad
         normal_style.content_margin_top=pad;   normal_style.content_margin_bottom=pad
         card.add_theme_stylebox_override("panel",normal_style)
@@ -2470,11 +2611,20 @@ func _add_card(path:String)->void:
         # frame. The texture keeps its aspect ratio inside it — square renders
         # pillarbox neatly, never stretched or cropped.
         var well:=PanelContainer.new()
-        var wsb:=StyleBoxFlat.new(); wsb.bg_color=S_SECTION_BG; wsb.set_corner_radius_all(3)
+        var wsb:=StyleBoxFlat.new(); wsb.bg_color=C_WELL_BG; wsb.set_corner_radius_all(3)
         wsb.set_content_margin_all(0)
         well.add_theme_stylebox_override("panel",wsb)
         well.size_flags_horizontal=SIZE_EXPAND_FILL
+        # 2.3 CRITICAL: the well is a PanelContainer, which STOPS mouse events
+        # by default — clicks on the thumbnail were being eaten here and never
+        # reached the card's gui_input (that's why only clicking the title
+        # selected a card). IGNORE lets the click fall through to the card
+        # itself, so the ENTIRE card is clickable: thumbnail, name, padding.
+        well.mouse_filter=Control.MOUSE_FILTER_IGNORE
         vb.add_child(well)
+        # The well is remembered on the card so _card_apply_state() can tint it
+        # blue/amber together with the card face (see 2.3 selection design).
+        card.set_meta("uap_well",well)
         var ir:=TextureRect.new(); ir.custom_minimum_size=Vector2(inner_w,thumb_h)
         ir.expand_mode=TextureRect.EXPAND_IGNORE_SIZE
         ir.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED
@@ -2497,10 +2647,12 @@ func _add_card(path:String)->void:
         if (ext2=="tscn" or ext2=="scn"):
                 var opened_root:=EditorInterface.get_edited_scene_root()
                 if is_instance_valid(opened_root) and opened_root.scene_file_path==path:
+                        # 2.3: borderless like every other resting card — the
+                        # warm fill + amber name carry the "open" signal.
                         var open_style:=StyleBoxFlat.new()
                         open_style.bg_color=Color(0.30,0.15,0.05,1.0)
-                        open_style.set_corner_radius_all(5); open_style.set_border_width_all(2)
-                        open_style.border_color=C_WARN
+                        open_style.set_corner_radius_all(5)
+                        open_style.set_border_width_all(0)
                         open_style.content_margin_left=pad; open_style.content_margin_right=pad
                         open_style.content_margin_top=pad;  open_style.content_margin_bottom=pad
                         card.add_theme_stylebox_override("panel",open_style)
@@ -2510,7 +2662,7 @@ func _add_card(path:String)->void:
                         nl.text+="  (open)"
                         nl.add_theme_color_override("font_color",C_WARN)
         if _multi_selected.has(path):
-                card.add_theme_stylebox_override("panel",_card_select_stylebox(true))
+                _card_apply_state(card,2)
         wrapper.add_child(card)
         # Favorite star: a SIBLING of `card` inside `wrapper`, not a child of
         # `card` — see the comment at the top of this function for why.
@@ -2519,7 +2671,10 @@ func _add_card(path:String)->void:
         # keeps the same mechanism on the new square card).
         var fav_btn:=Button.new(); fav_btn.flat=true
         var fav_size:=maxi(12,int(16*_es))
-        var fav_m:=maxi(2,int(3*_es))
+        # 2.3 star inset: per the red-doodle mockup, the star sits noticeably
+        # INSIDE the corner and — the key requirement — at the SAME distance
+        # from the upper edge and the right edge (m on both sides).
+        var fav_m:=maxi(4,int(8*_es))
         fav_btn.anchor_left=1.0; fav_btn.anchor_right=1.0
         fav_btn.anchor_top=0.0;  fav_btn.anchor_bottom=0.0
         fav_btn.offset_left=-fav_size-fav_m
@@ -2689,11 +2844,13 @@ func _select_card(path:String,card:PanelContainer,normal_style:StyleBoxFlat)->vo
         if not _selected_path_ui.is_empty() and _card_map.has(_selected_path_ui):
                 var prev:=_card_map[_selected_path_ui] as PanelContainer
                 if is_instance_valid(prev) and prev!=card:
-                        prev.add_theme_stylebox_override("panel",_card_select_stylebox(false))
+                        _card_apply_state(prev,0)
         selected_path=path; _selected_path_ui=path; _last_clicked_path=path
-        # Active card = blue 3D raised: solid blue face, darker bottom bevel —
-        # same tactile language as the mode/scroll buttons, in blue as requested.
-        card.add_theme_stylebox_override("panel",_card_select_stylebox_raised(C_SEL_BD))
+        # Active card = blue 3D raised across the WHOLE card: solid blue face,
+        # darker bottom bevel, plus a blue-tinted thumbnail well so the blue
+        # reads around the image too — same tactile language as the mode/scroll
+        # buttons, in blue as requested.
+        _card_apply_state(card,1)
         var root:=EditorInterface.get_edited_scene_root()
         if root==null or not root is Node3D:
                 set_status("Open a 3D scene first to start placing assets.",C_WARN); return
@@ -2729,13 +2886,14 @@ func activate_asset_from_eyedropper(path:String)->void:
         set_status("Picked: "+path.get_file().get_basename()+" (hidden by current filter)   |   RMB / ESC = cancel",C_PLACING)
 
 func _card_select_stylebox(selected:bool)->StyleBoxFlat:
-        # Base card look: solid dark card, thin neutral border. No white
-        # highlight, no transparency.
+        # 2.3 card faces. Resting (selected=false): solid dark fill with NO
+        # border of any kind — flat, clean, nothing "vibe-coded" about it.
+        # selected=true is kept for compatibility and now returns the raised
+        # amber multi-select treatment (see _card_select_stylebox_raised).
         var sb:=StyleBoxFlat.new(); sb.set_corner_radius_all(5)
         if selected:
-                sb.bg_color=C_MULTI.darkened(0.72); sb.set_border_width_all(2); sb.border_color=C_MULTI
-        else:
-                sb.bg_color=C_CARD_BG; sb.set_border_width_all(1); sb.border_color=C_CARD_BD
+                return _card_select_stylebox_raised(C_MULTI)
+        sb.bg_color=C_CARD_BG
         return sb
 
 ## Raised 3D treatment for an "active" card (blue by default, amber for
@@ -2749,13 +2907,46 @@ func _card_select_stylebox_raised(color:Color)->StyleBoxFlat:
         sb.shadow_offset=Vector2(0,int(2*_es))
         return sb
 
+## 2.3 — ONE entry point for every card visual state. `card` is the
+## PanelContainer (as stored in _card_map), `state`:
+##   0 = resting        → solid dark face, no outline, neutral well
+##   1 = single-select  → BLUE raised 3D face + blue-tinted well around the
+##                        thumbnail (previously the blue only showed on the
+##                        name row — the well stayed dark)
+##   2 = multi-select   → AMBER raised 3D face (same bevel+shadow language,
+##                        previously a flat bordered box with no 3D) +
+##                        amber-tinted well
+func _card_apply_state(card:PanelContainer, state:int)->void:
+        if not is_instance_valid(card): return
+        var well_v:Variant = card.get_meta("uap_well", null) if card.has_meta("uap_well") else null
+        match state:
+                1:
+                        card.add_theme_stylebox_override("panel",_card_select_stylebox_raised(C_SEL_BD))
+                        _card_well_bg(well_v,C_WELL_SEL)
+                2:
+                        card.add_theme_stylebox_override("panel",_card_select_stylebox_raised(C_MULTI))
+                        _card_well_bg(well_v,C_WELL_MULTI)
+                _:
+                        card.add_theme_stylebox_override("panel",_card_select_stylebox(false))
+                        _card_well_bg(well_v,C_WELL_BG)
+
+## Re-tints a card's thumbnail well (see _card_apply_state). Accepts an
+## untyped ref because the meta lookup may return null for old cards.
+func _card_well_bg(well_v:Variant, col:Color)->void:
+        if well_v==null or not (well_v is PanelContainer): return
+        var well:=well_v as PanelContainer
+        if not is_instance_valid(well): return
+        var sb:=StyleBoxFlat.new(); sb.bg_color=col; sb.set_corner_radius_all(3)
+        sb.set_content_margin_all(0)
+        well.add_theme_stylebox_override("panel",sb)
+
 func _toggle_multi_select(path:String,card:PanelContainer)->void:
         if _multi_selected.has(path):
                 _multi_selected.erase(path)
-                card.add_theme_stylebox_override("panel",_card_select_stylebox(false))
+                _card_apply_state(card,0)
         else:
                 _multi_selected.append(path); _last_clicked_path=path
-                card.add_theme_stylebox_override("panel",_card_select_stylebox(true))
+                _card_apply_state(card,2)
         _update_multi_select_bar()
 
 func _range_select(path:String)->void:
@@ -2767,7 +2958,7 @@ func _range_select(path:String)->void:
                 var p:=_visible_paths_ordered[i] as String
                 if not _multi_selected.has(p): _multi_selected.append(p)
                 var c:=_card_map.get(p,null) as PanelContainer
-                if is_instance_valid(c): c.add_theme_stylebox_override("panel",_card_select_stylebox(true))
+                if is_instance_valid(c): _card_apply_state(c,2)
         _update_multi_select_bar()
 
 func _select_all_assets()->void:
@@ -2780,7 +2971,7 @@ func _select_all_assets()->void:
         _last_clicked_path=_visible_paths_ordered[_visible_paths_ordered.size()-1]
         for p in _multi_selected:
                 var c:=_card_map.get(p,null) as PanelContainer
-                if is_instance_valid(c): c.add_theme_stylebox_override("panel",_card_select_stylebox(true))
+                if is_instance_valid(c): _card_apply_state(c,2)
         _update_multi_select_bar()
         set_status("Selected all %d assets in view."%_multi_selected.size(),C_OK)
 
@@ -2788,7 +2979,7 @@ func _clear_multi_select()->void:
         for path in _multi_selected:
                 var c:=_card_map.get(path,null) as PanelContainer
                 if is_instance_valid(c) and path!=_selected_path_ui:
-                        c.add_theme_stylebox_override("panel",_card_select_stylebox(false))
+                        _card_apply_state(c,0)
         _multi_selected.clear(); _update_multi_select_bar()
 
 func _update_multi_select_bar()->void:
@@ -2822,7 +3013,7 @@ func on_placement_stopped()->void:
         if not _selected_path_ui.is_empty() and _card_map.has(_selected_path_ui):
                 var prev:=_card_map[_selected_path_ui] as PanelContainer
                 if is_instance_valid(prev):
-                        prev.add_theme_stylebox_override("panel",_card_select_stylebox(false))
+                        _card_apply_state(prev,0)
         _selected_path_ui=""; selected_path=""
         if is_instance_valid(_stop_btn):_stop_btn.disabled=true
         set_status("Click an asset to start placing",C_OK)
