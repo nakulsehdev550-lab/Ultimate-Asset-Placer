@@ -60,6 +60,30 @@ read as a button at all. It now wears a **raised blue 3D face** (solid fill,
 darker bottom bevel, drop shadow — the same tactile language as the active
 mode buttons), clearly visible against the panel, still on-theme, not white.
 
+### Every standalone action button reads as a button (2.5.0 rev 2)
+Start Physics was only the first case — the same low-contrast idle dress hit
+every standalone action button on every tab. All of them now carry a raised
+3D face with one face color per meaning, so each button is unmistakable at a
+glance while staying dark and on-theme:
+- **Steel blue** (standard actions): Create New Spline, Use Selected Spline,
+  Exit Spline Mode, Smooth, Sharpen, Drop to Ground, Wrap Points to Terrain,
+  Subdivide & Wrap, + Scatter (Props), + Deform (Roads), BAKE TO MULTIMESH,
+  Lift Selected Up, Generate Instance Collision, Commit MultiMesh, Remove
+  Layer, Reset X Y Z, Reset All to Defaults, Create Asset Zoo.
+- **Dark red** (destructive): Delete Active Spline, Clear All MultiMesh
+  Instances, Cancel (physics).
+- **Dark green** (finalize): BAKE TO NODES (Finalize).
+- **Dark amber** (stop/hold): Stop (physics, shown while simulating).
+- BAKE TO NODES / BAKE TO MULTIMESH / Delete Active Spline keep their meaning
+  via the face color now; their old dim colored text overrides are gone
+  (raised faces use crisp near-white labels).
+
+### Spline tab order fixed (2.5.0 rev 2)
+**+ Create New Spline now sits above Exit Spline Mode.** The Exit button used
+to be the very first control at the top of the tab — above the setup section
+that contains the Create button — which read backwards. Exit now lives
+directly below the Create/Use row inside "1. Spline Node Setup".
+
 ### Silent by default
 - The `[Ultimate Asset Placer] Theme pass dressed N buttons…` debug prints
   (a 2.3 leftover) are removed. The counters are kept internally for the test

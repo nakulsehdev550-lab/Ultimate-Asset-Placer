@@ -55,13 +55,23 @@ drag-and-drop / auto-shape hints) are gone — every tab has the **(i)** help
 button and the Docs window now, so the controls moved back up where you can
 reach them.
 
-### Start Physics finally reads as a button
-The Physics tab's primary action wore the same low-contrast dark dress as the
-panel around it. It is now a **raised blue 3D button** — the same tactile
-treatment as the active mode buttons: clearly a button, still on-theme, never
-white.
+### Every action button now reads as a button
+Start Physics was only the first fix. **Every standalone action button** —
+Create New Spline, Use Selected Spline, Smooth, Sharpen, Drop to Ground, Wrap
+Points to Terrain, the bake buttons, Lift Selected Up, Reset X Y Z, Reset All
+to Defaults, Create Asset Zoo, the MultiMesh tools… — now wears a **raised 3D
+face** so nothing melts into the panel anymore. One face color per meaning:
+steel blue for standard actions, dark red for destructive ones (Delete Active
+Spline, Clear All MultiMesh Instances), dark green for the finalize bake, and
+amber for Stop while a simulation runs.
 
-![Physics tab with raised Start button](screenshots/physics_tab.png)
+On the Spline tab the buttons were also reordered: **+ Create New Spline now
+sits above Exit Spline Mode** (exit used to be the very first control at the
+top of the tab, which read backwards).
+
+![Physics tab with raised action buttons](screenshots/physics_tab.png)
+
+![Spline tab with raised action buttons](screenshots/spline_tab.png)
 
 ### Silent by default
 The `[Ultimate Asset Placer] Theme pass dressed …` debug lines that were
