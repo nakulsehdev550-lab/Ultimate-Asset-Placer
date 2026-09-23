@@ -292,12 +292,13 @@ const S_SECTION_LINE := Color(0.024,0.027,0.038)
 const C_WELL_BG      := Color(0.055,0.060,0.082)   # resting: deepest inset layer (darker than the card face)
 const C_WELL_SEL     := Color(0.125,0.235,0.360)   # single-select: blue-tinted
 const C_WELL_MULTI   := Color(0.330,0.245,0.090)   # multi-select: amber-tinted
-# 2.5: standalone ACTION buttons (Start Physics, Create New Spline, Reset X Y Z…)
-# are raised so they never blend into the panel. One face color per meaning —
-# all deliberately dark, on-theme, and clearly distinct from the panel bg.
-const C_BTN_ACTION  := Color(0.16,0.34,0.55)   # steel blue — standard actions
-const C_BTN_DANGER  := Color(0.45,0.16,0.16)   # dark red     — destructive actions
-const C_BTN_SUCCESS := Color(0.14,0.38,0.22)   # dark green   — finalize/bake actions
+# 2.5 rev 3: ONLY standalone panel-level action buttons are raised (Start
+# Physics row, Create New Spline, Exit Spline Mode, Reset All to Defaults and
+# the Groups-tab action cluster). Buttons INSIDE a group section keep the
+# quiet idle look. One face color per meaning — all deliberately dark,
+# on-theme, and clearly distinct from the panel bg.
+const C_BTN_ACTION  := Color(0.16,0.34,0.55)   # steel blue — standalone panel actions
+const C_BTN_DANGER  := Color(0.45,0.16,0.16)   # dark red     — destructive standalone actions
 const C_BTN_STOP    := Color(0.48,0.34,0.08)   # dark amber   — stop/hold actions
 # Tab → docs chapter (order = TabContainer page order):
 # Place→"Place Tab", Transform→"Transform Tab", Paint→"Paint Tab",
@@ -1535,7 +1536,6 @@ func _build_place_tab()->void:
         var zr:=HBoxContainer.new(); zr.add_theme_constant_override("separation",4); zoo.add_child(zr)
         var zb:=Button.new(); zb.text="Create Asset Zoo"; zb.size_flags_horizontal=SIZE_EXPAND_FILL
         UAPIcons.set_button_icon(zb, "feature_zoo")
-        _style_raised_button(zb,C_BTN_ACTION)
         zb.pressed.connect(_on_zoo_pressed); zr.add_child(zb)
         var zsrc_row:=_row("Source",zoo)
         _zoo_source_opt=OptionButton.new(); _zoo_source_opt.size_flags_horizontal=SIZE_EXPAND_FILL
@@ -1564,7 +1564,6 @@ func _build_transform_tab()->void:
         var yr:=_row("Rot Y",rv); _rot_y_spin=_ss(-360.0,360.0,0.0,1.0); _rot_y_spin.value_changed.connect(_on_rot_y_changed); yr.add_child(_rot_y_spin)
         var zr2:=_row("Rot Z",rv); _rot_z_spin=_ss(-360.0,360.0,0.0,1.0); _rot_z_spin.value_changed.connect(_on_rot_z_changed); zr2.add_child(_rot_z_spin)
         var rb2:=Button.new(); rb2.text="Reset X Y Z"; rb2.size_flags_horizontal=SIZE_EXPAND_FILL
-        _style_raised_button(rb2,C_BTN_ACTION)
         rb2.pressed.connect(func(): if is_instance_valid(placer):placer.call("apply_preset_orient",0.0,0.0,0.0)); rv.add_child(rb2)
         var oi:=_section(vb,"Quick Orient Presets",false)
         var of_:=FlowContainer.new(); of_.size_flags_horizontal=SIZE_EXPAND_FILL
@@ -1665,13 +1664,10 @@ func _build_paint_tab()->void:
         _row_chk("MultiMesh Mode",mm,multimesh_mode,_on_multimesh_toggled,"Paint multiple instances as one MultiMesh")
         _row_chk("Add Collision",mm,mm_collision_enabled,func(v:bool):mm_collision_enabled=v;_save_config())
         var mclr_btn:=Button.new(); mclr_btn.text="Clear All MultiMesh Instances"
-        _style_raised_button(mclr_btn,C_BTN_DANGER)   # destructive → danger red
         mclr_btn.size_flags_horizontal=SIZE_EXPAND_FILL; mclr_btn.pressed.connect(_on_mm_clear); mm.add_child(mclr_btn)
         var mcol:=Button.new(); mcol.text="Generate Instance Collision"
-        _style_raised_button(mcol,C_BTN_ACTION)
         mcol.size_flags_horizontal=SIZE_EXPAND_FILL; mcol.pressed.connect(_on_mm_generate_collision); mm.add_child(mcol)
         var mbk:=Button.new(); mbk.text="Commit MultiMesh"; mbk.size_flags_horizontal=SIZE_EXPAND_FILL
-        _style_raised_button(mbk,C_BTN_ACTION)
         mbk.pressed.connect(func(): if is_instance_valid(placer):placer.call("mm_commit_to_scene");set_status("MultiMesh committed.",C_OK))
         mm.add_child(mbk)
 
@@ -1695,6 +1691,21 @@ func _build_spline_tab()->void:
         _spline_mode_lbl.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
         _spline_mode_lbl.size_flags_horizontal=SIZE_EXPAND_FILL
         status_row.add_child(_spline_mode_lbl)
+        # 2.5 rev 3: "Create New Spline" was pulled OUT of the group — the user
+        # wants it as a standalone tab-level action sitting directly ABOVE the
+        # Exit button, and NEITHER of them inside the "1. Spline Node Setup"
+        # section. Both sit straight on the panel, so both get the raised 3D
+        # face (same treatment as Start Physics) to stay readable as buttons.
+        var create_row:=HBoxContainer.new(); create_row.add_theme_constant_override("separation",4); vb.add_child(create_row)
+        var csbtn:=Button.new(); csbtn.text="+ Create New Spline"; csbtn.size_flags_horizontal=SIZE_EXPAND_FILL
+        _style_raised_button(csbtn,C_BTN_ACTION)
+        csbtn.pressed.connect(_on_create_spline_node); create_row.add_child(csbtn)
+        var exit_row:=HBoxContainer.new(); exit_row.add_theme_constant_override("separation",4); vb.add_child(exit_row)
+        var exit_btn:=Button.new(); exit_btn.text="Exit Spline Mode"; exit_btn.size_flags_horizontal=SIZE_EXPAND_FILL
+        UAPIcons.set_button_icon(exit_btn, "action_close")
+        _style_raised_button(exit_btn,C_BTN_ACTION)
+        exit_btn.tooltip_text="Restore the previous placement mode and re-enable the ghost cursor."
+        exit_btn.pressed.connect(_exit_spline_mode); exit_row.add_child(exit_btn)
         _update_spline_mode_label()
         # 2.5: the long "Advanced Spline System…" description block was removed
         # — every tab has an "i" help button now, so paragraphs like this one
@@ -1702,41 +1713,23 @@ func _build_spline_tab()->void:
         vb.add_child(_sep())
         var cs_sec:=_section(vb,"1. Spline Node Setup")
         var btn_row1:=HBoxContainer.new()
-        # 2.5: every standalone action button gets a raised face (same treatment
-        # as Start Physics) so it reads as a clickable button against the panel.
-        var csbtn:=Button.new(); csbtn.text="+ Create New Spline"; csbtn.size_flags_horizontal=SIZE_EXPAND_FILL
-        _style_raised_button(csbtn,C_BTN_ACTION)
-        csbtn.pressed.connect(_on_create_spline_node); btn_row1.add_child(csbtn)
+        # 2.5 rev 3: buttons INSIDE a group section keep the quiet idle look —
+        # only standalone panel-level actions are raised.
         var selbtn:=Button.new(); selbtn.text="Use Selected Spline"; selbtn.size_flags_horizontal=SIZE_EXPAND_FILL
-        _style_raised_button(selbtn,C_BTN_ACTION)
         selbtn.pressed.connect(_on_select_existing_spline); btn_row1.add_child(selbtn); cs_sec.add_child(btn_row1)
-        # 2.5: the Exit button now lives directly BELOW the Create/Use row —
-        # the tab previously showed "Exit Spline Mode" above everything, which
-        # read backwards (you exit AFTER working with the spline, not before).
-        var exit_row:=HBoxContainer.new(); exit_row.add_theme_constant_override("separation",4); cs_sec.add_child(exit_row)
-        var exit_btn:=Button.new(); exit_btn.text="Exit Spline Mode"; exit_btn.size_flags_horizontal=SIZE_EXPAND_FILL
-        UAPIcons.set_button_icon(exit_btn, "action_close")
-        _style_raised_button(exit_btn,C_BTN_ACTION)
-        exit_btn.tooltip_text="Restore the previous placement mode and re-enable the ghost cursor."
-        exit_btn.pressed.connect(_exit_spline_mode); exit_row.add_child(exit_btn)
         var util_row:=HBoxContainer.new()
         var sm_btn:=Button.new(); sm_btn.text="Smooth"; sm_btn.size_flags_horizontal=SIZE_EXPAND_FILL
-        _style_raised_button(sm_btn,C_BTN_ACTION)
         sm_btn.pressed.connect(func(): if is_instance_valid(_active_spline_tool):_active_spline_tool.call("smooth_all_points"))
         var sh_btn:=Button.new(); sh_btn.text="Sharpen"; sh_btn.size_flags_horizontal=SIZE_EXPAND_FILL
-        _style_raised_button(sh_btn,C_BTN_ACTION)
         sh_btn.pressed.connect(func(): if is_instance_valid(_active_spline_tool):_active_spline_tool.call("sharpen_all_points"))
         util_row.add_child(sm_btn); util_row.add_child(sh_btn); cs_sec.add_child(util_row)
         var del_btn:=Button.new(); del_btn.text="Delete Active Spline"
-        # 2.5: destructive action → raised dark-red danger face, white text
-        # (the old dim red-on-dark text was nearly invisible).
-        _style_raised_button(del_btn,C_BTN_DANGER)
+        del_btn.add_theme_color_override("font_color",C_ERROR)
         del_btn.pressed.connect(_on_delete_active_spline); cs_sec.add_child(del_btn)
         vb.add_child(_sep())
         var ts:=_section(vb,"2. Terrain Snapping")
         _info(ts,"Requires physics collision below the spline.")
         var drop_btn:=Button.new(); drop_btn.text="Drop to Ground (Keep Shape)"
-        _style_raised_button(drop_btn,C_BTN_ACTION)
         drop_btn.tooltip_text="Moves the whole spline down so the lowest point touches the floor."
         drop_btn.pressed.connect(func():
                 if not is_instance_valid(_active_spline_tool): return
@@ -1746,7 +1739,6 @@ func _build_spline_tab()->void:
                 else: set_status("Spline dropped to ground.",C_OK))
         ts.add_child(drop_btn)
         var conf_btn:=Button.new(); conf_btn.text="Wrap Points to Terrain"
-        _style_raised_button(conf_btn,C_BTN_ACTION)
         conf_btn.tooltip_text="Drops existing control points directly onto the collision surface."
         conf_btn.pressed.connect(func():
                 if not is_instance_valid(_active_spline_tool): return
@@ -1756,26 +1748,21 @@ func _build_spline_tab()->void:
                 else: set_status("All points wrapped to terrain.",C_OK))
         ts.add_child(conf_btn)
         var conf2_btn:=Button.new(); conf2_btn.text="Subdivide & Wrap (Exact Shape)"
-        _style_raised_button(conf2_btn,C_BTN_ACTION)
         conf2_btn.tooltip_text="Adds points every 1 meter and hugs hills and cliffs exactly."
         conf2_btn.pressed.connect(func(): if is_instance_valid(_active_spline_tool):_active_spline_tool.call("subdivide_and_conform")); ts.add_child(conf2_btn)
         vb.add_child(_sep())
         var lm:=_section(vb,"3. Layer Manager")
         var btn_row2:=HBoxContainer.new()
         var add_rep:=Button.new(); add_rep.text="+ Scatter (Props)"; add_rep.size_flags_horizontal=SIZE_EXPAND_FILL
-        _style_raised_button(add_rep,C_BTN_ACTION)
         add_rep.pressed.connect(func(): _on_add_spline_layer(0)); btn_row2.add_child(add_rep)
         var add_str:=Button.new(); add_str.text="+ Deform (Roads)"; add_str.size_flags_horizontal=SIZE_EXPAND_FILL
-        _style_raised_button(add_str,C_BTN_ACTION)
         add_str.pressed.connect(func(): _on_add_spline_layer(1)); btn_row2.add_child(add_str); lm.add_child(btn_row2)
         var layer_vbox:=VBoxContainer.new(); layer_vbox.name="SplineLayerList"; lm.add_child(layer_vbox)
         vb.add_child(_sep())
         var uc:=_section(vb,"4. Bake to Scene",false)
         _info(uc,"Procedural Splines respawn objects if you delete them. To delete individual parts, you MUST BAKE the spline first!")
         var bake_btn:=Button.new(); bake_btn.text="BAKE TO NODES (Finalize)"
-        bake_btn.custom_minimum_size=Vector2(0,int(40*_es))
-        # 2.5: finalize action → raised dark-green success face, white text.
-        _style_raised_button(bake_btn,C_BTN_SUCCESS)
+        bake_btn.custom_minimum_size=Vector2(0,int(40*_es)); bake_btn.add_theme_color_override("font_color",C_OK)
         bake_btn.pressed.connect(func():
                 if is_instance_valid(_active_spline_tool):
                         _active_spline_tool.call("bake_to_nodes"); _active_spline_tool=null
@@ -1783,8 +1770,7 @@ func _build_spline_tab()->void:
                         _rebuild_spline_layer_ui(); set_status("Spline baked! You can now edit or delete individual pieces.",C_OK))
         uc.add_child(bake_btn)
         var bake_mm_btn:=Button.new(); bake_mm_btn.text="BAKE TO MULTIMESH (Performance)"
-        bake_mm_btn.custom_minimum_size=Vector2(0,int(40*_es))
-        _style_raised_button(bake_mm_btn,C_BTN_ACTION)
+        bake_mm_btn.custom_minimum_size=Vector2(0,int(40*_es)); bake_mm_btn.add_theme_color_override("font_color",C_ACCENT)
         bake_mm_btn.tooltip_text="Bakes scatter layers as MultiMeshInstance3D nodes instead of individual MeshInstance3D nodes. Ideal for grass, rocks, and any layer with many repeated instances. Deform layers are baked as a regular mesh."
         bake_mm_btn.pressed.connect(func():
                 if is_instance_valid(_active_spline_tool):
@@ -1975,7 +1961,6 @@ func _rebuild_spline_layer_ui()->void:
                         uv_row.add_child(ux); uv_row.add_child(uy)
                 var bot:=HBoxContainer.new()
                 var rm:=Button.new(); rm.text="Remove Layer"
-                _style_raised_button(rm,C_BTN_ACTION)
                 rm.pressed.connect(func(): _active_spline_tool.call("remove_layer",i); _rebuild_spline_layer_ui()); bot.add_child(rm); sec.add_child(bot)
 
 func _build_material_tab()->void:
@@ -1997,7 +1982,10 @@ func _build_groups_tab()->void:
         var ar:=HBoxContainer.new(); ar.add_theme_constant_override("separation",4); vb.add_child(ar)
         var ne:=LineEdit.new(); ne.placeholder_text="New group name..."; ne.size_flags_horizontal=SIZE_EXPAND_FILL; ar.add_child(ne)
         var ab:=Button.new(); ab.text="+ Add"; ab.pressed.connect(_on_add_group.bind(ne)); ar.add_child(ab)
-        _style_idle_button(ab)
+        # 2.5 rev 3: standalone panel-level action (not inside any section) —
+        # raised 3D face so it never blends into the panel. Same rule that
+        # fixed Start Physics: standalone + blends → raised, in-group → idle.
+        _style_raised_button(ab,C_BTN_ACTION)
         vb.add_child(_sep())
         _group_list_vbox=VBoxContainer.new(); _group_list_vbox.size_flags_horizontal=SIZE_EXPAND_FILL
         _group_list_vbox.add_theme_constant_override("separation",3); vb.add_child(_group_list_vbox); _rebuild_group_list()
@@ -2012,8 +2000,10 @@ func _build_groups_tab()->void:
         for g in _groups: go.add_item((g as Dictionary)["name"])
         ar2.add_child(go); _group_drop=go
         var gb:=Button.new(); gb.text="Add"; gb.tooltip_text="Add the currently selected/multi-selected asset(s) to the group above."
+        _style_raised_button(gb,C_BTN_ACTION)
         gb.pressed.connect(_on_add_to_group.bind(go)); ar2.add_child(gb)
         var gbr:=Button.new(); UAPIcons.set_button_icon(gbr,"action_browse")
+        _style_raised_button(gbr,C_BTN_ACTION)
         gbr.tooltip_text="Import an entire folder of assets into the group above."
         gbr.pressed.connect(_on_import_folder_to_group.bind(go)); ar2.add_child(gbr)
         # ── Remove selected asset(s) from groups ─────────────────────────────────────
@@ -2026,7 +2016,9 @@ func _build_groups_tab()->void:
         var rm_info:=Label.new(); rm_info.text="Remove selected:"
         rm_info.add_theme_color_override("font_color",C_DIM); rm_info.size_flags_horizontal=SIZE_EXPAND_FILL; rmr.add_child(rm_info)
         var rm_btn:=Button.new(); rm_btn.text="Remove from Group"
-        rm_btn.add_theme_color_override("font_color",C_ERROR)
+        # 2.5 rev 3: standalone destructive action → raised dark-red danger face
+        # with crisp white text (replaces the old dim red-on-dark label).
+        _style_raised_button(rm_btn,C_BTN_DANGER)
         rm_btn.tooltip_text="Removes selected asset(s) from the currently viewed group.\nIf viewing All or search, removes from every group they belong to.\nSupports multi-selection (Ctrl+Click / Shift+Click)."
         rm_btn.pressed.connect(_on_smart_remove_from_group); rmr.add_child(rm_btn)
         # 2.5: the multi-line Drag & Drop hint section was removed — same
@@ -2187,7 +2179,6 @@ func _build_physics_tab()->void:
                 "Randomize orientation on lift, so a dropped pile of debris doesn't look uniform.")
         var lift_btn:=Button.new(); lift_btn.text="Lift Selected Up"; lift_btn.size_flags_horizontal=SIZE_EXPAND_FILL
         UAPIcons.set_button_icon(lift_btn,"action_chevron_up")
-        _style_raised_button(lift_btn,C_BTN_ACTION)
         lift_btn.tooltip_text="Raise every selected object straight up by Height, ready to drop."
         lift_btn.pressed.connect(func(): if is_instance_valid(physics_ctrl): physics_ctrl.call("lift_selected"))
         lift.add_child(lift_btn)

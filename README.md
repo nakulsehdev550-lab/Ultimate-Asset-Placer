@@ -55,23 +55,29 @@ drag-and-drop / auto-shape hints) are gone — every tab has the **(i)** help
 button and the Docs window now, so the controls moved back up where you can
 reach them.
 
-### Every action button now reads as a button
-Start Physics was only the first fix. **Every standalone action button** —
-Create New Spline, Use Selected Spline, Smooth, Sharpen, Drop to Ground, Wrap
-Points to Terrain, the bake buttons, Lift Selected Up, Reset X Y Z, Reset All
-to Defaults, Create Asset Zoo, the MultiMesh tools… — now wears a **raised 3D
-face** so nothing melts into the panel anymore. One face color per meaning:
-steel blue for standard actions, dark red for destructive ones (Delete Active
-Spline, Clear All MultiMesh Instances), dark green for the finalize bake, and
-amber for Stop while a simulation runs.
+### Standalone action buttons now read as buttons
+The button fix now follows one precise rule: a button wears the **raised 3D
+face** only when it sits **directly on the panel** — not inside any group
+section — and would otherwise melt into the background. That covers Start
+Physics (and its Stop / Cancel companions), **+ Create New Spline**, Exit
+Spline Mode, Reset All to Defaults, and the Groups-tab action cluster:
+**+ Add**, **Add**, the folder-import button, and **Remove from Group**,
+which now carries a dark-red destructive face with white text. Steel blue is
+the standard action color, dark red marks destructive actions, and amber
+marks Stop while a simulation runs.
 
-On the Spline tab the buttons were also reordered: **+ Create New Spline now
-sits above Exit Spline Mode** (exit used to be the very first control at the
-top of the tab, which read backwards).
+**Buttons inside a group section keep the quiet idle look** — Use Selected
+Spline, Smooth / Sharpen, the terrain tools, the bake buttons, Lift Selected
+Up, Reset X Y Z, Create Asset Zoo, the MultiMesh tools — so a raised face
+always means "a real panel-level action", not just decoration.
 
-![Physics tab with raised action buttons](screenshots/physics_tab.png)
+On the Spline tab **+ Create New Spline was pulled out of the group** and now
+sits directly **above Exit Spline Mode** — and neither button lives inside the
+"1. Spline Node Setup" section.
 
-![Spline tab with raised action buttons](screenshots/spline_tab.png)
+![Physics tab with the raised Start Physics action](screenshots/physics_tab.png)
+
+![Spline tab with Create New Spline above Exit Spline Mode](screenshots/spline_tab.png)
 
 ### Silent by default
 The `[Ultimate Asset Placer] Theme pass dressed …` debug lines that were

@@ -84,6 +84,31 @@ to be the very first control at the top of the tab — above the setup section
 that contains the Create button — which read backwards. Exit now lives
 directly below the Create/Use row inside "1. Spline Node Setup".
 
+### Raised faces scoped to standalone actions only (2.5.0 rev 3)
+The rev-2 pass over-applied the treatment — buttons INSIDE group sections
+were raised too, which read wrong. The rule is now precise, and the user's
+decision was respected everywhere:
+- **Raised 3D face → only buttons sitting directly on the panel** (not inside
+  any group section, and previously melting into it): Start Physics, Stop and
+  Cancel, **+ Create New Spline**, Exit Spline Mode, Reset All to Defaults,
+  and the Groups-tab action cluster — **+ Add**, **Add**, the folder-import
+  button, and **Remove from Group** (now a dark-red destructive face with
+  white text instead of the dim red label).
+- **Idle dark face again → every button inside a group section**: Use
+  Selected Spline, Smooth / Sharpen, Delete Active Spline (its dim red label
+  is back), Drop to Ground / Wrap / Subdivide & Wrap, + Scatter / + Deform,
+  BAKE TO NODES (green label restored), BAKE TO MULTIMESH (blue label
+  restored), Remove Layer, Lift Selected Up, Reset X Y Z, Create Asset Zoo,
+  Clear All MultiMesh Instances / Generate Instance Collision / Commit
+  MultiMesh.
+- **Spline tab layout per the user's instruction:** + Create New Spline was
+  pulled OUT of the group and sits directly ABOVE Exit Spline Mode; neither
+  button lives inside "1. Spline Node Setup".
+- The unused green face constant was removed; the audit harness now asserts
+  both directions (10 raised buttons must match their face colors, 17
+  in-group buttons must be idle) and that neither spline button is inside
+  the section.
+
 ### Silent by default
 - The `[Ultimate Asset Placer] Theme pass dressed N buttons…` debug prints
   (a 2.3 leftover) are removed. The counters are kept internally for the test
