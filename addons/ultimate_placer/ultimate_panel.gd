@@ -1,9 +1,7 @@
 @tool
 extends Control
 
-# --- THUMBNAIL SETTINGS ---
-var MAX_THUMBNAIL_RETRIES: int = 3
-# --------------------------
+
 
 const CONFIG_PATH := "user://ultimate_asset_placer.cfg"
 
@@ -62,15 +60,12 @@ const SHORTCUT_LABELS: Dictionary = {
 
 const BUILD_BATCH      := 15
 const THUMB_INTERVAL   := 0.1
-const MAX_PENDING      := 6
 const MAX_PER_TICK     := 2
+const MAX_CACHE_LOADS  := 8   # disk-PNG loads per visibility tick (spreads decode cost)
 const THUMB_CACHE_MAX  := 500
 const SCAN_DIRS_FRAME  := 6
 const SKIP_DIRS := [".godot", ".import", ".git", ".vs"]
-const LIGHT_PREVIEW_EXTS := ["glb","gltf","fbx","obj","dae","res","mesh"]
-const HEAVY_PREVIEW_EXTS := ["tscn","scn"]
 const ALL_PREVIEW_EXTS := ["glb","gltf","fbx","obj","dae","res","mesh","tscn","scn"]
-const MAX_HEAVY_PENDING := 1
 
 
 # ─── SliderSpin: horizontal slider + editable number field ────────────────────
@@ -236,9 +231,10 @@ var shortcuts:Dictionary={
         "flip_x":KEY_G,"flip_z":KEY_B,"reset_rot":KEY_T,
 }
 var _preview_size:int=88; var _all_paths:Array=[]; var _groups:Array=[]
-var _grid_rm:int=0   # 2.5: right margin reserved on the asset grid so the
-                     # favorite star (which straddles the card's right edge)
-                     # never gets clipped by the scroll view / scrollbar
+var _grid_rm:int=0   # 0 since rev 4: the favorite star sits FULLY INSIDE the
+                     # card (pinned to the thumbnail's top-right corner), so
+                     # nothing overhangs the grid anymore. Kept in the column
+                     # math so a future reservation needs no re-derivation.
 var _favorite_paths:Array=[]  ## Favorites' actual storage — a separate list, NOT a _groups entry
 var _active_group:int=-1; var _is_placing:bool=false
 var items_per_page:int=1000; var current_page:int=0
@@ -445,7 +441,8 @@ func _ready()->void:
                         _thumb_gen.name = "__UAPThumbGen__"
                         add_child(_thumb_gen)
                         _thumb_gen.thumbnail_ready.connect(_on_thumb_gen_ready)
-                        _thumb_gen.call("set_preview_resolution",_preview_size)
+                        var m0:=_card_thumb_metrics(_preview_size)
+                        _thumb_gen.call("set_preview_metrics",m0.x,m0.y)
         _scan_folder()
 
 func _process(delta:float)->void:
@@ -503,7 +500,6 @@ func _on_scan_finished()->void:
         _rebuild_browser(filter)
         set_status("Loaded %d assets — click any to start placing"%_all_paths.size(),C_OK)
 
-func _is_heavy_format(path:String)->bool: return path.get_extension().to_lower() in HEAVY_PREVIEW_EXTS
 func _can_preview_path(path:String)->bool: return path.get_extension().to_lower() in ALL_PREVIEW_EXTS
 
 func _check_visible_thumbnails()->void:
@@ -512,17 +508,19 @@ func _check_visible_thumbnails()->void:
         if scroll_rect.size.x <= 1.0 or scroll_rect.size.y <= 1.0: return
         var load_rect := scroll_rect.grow_side(SIDE_BOTTOM, float(_preview_size))
 
-        # Count ONLY light-format pending to avoid tscn queue blocking GLB/GLTF dispatch
-        var light_pending_count := 0
-        for _v in _thumb_pending.values():
-                if (_v as String) == "light": light_pending_count += 1
-
-        var dispatched_light := 0
+        var dispatched := 0      # studio render dispatches this tick
+        var cache_loads := 0     # disk PNG loads this tick (each decodes a file)
 
         for path in _visible_paths_ordered:
-                if dispatched_light >= MAX_PER_TICK: break
+                if dispatched >= MAX_PER_TICK: break
                 if _thumb_cache.has(path): continue
-                if _thumb_pending.has(path): continue
+                if _thumb_pending.has(path):
+                        # Safety net: a pending entry older than 10s means its
+                        # render was silently lost (e.g. an aborted coroutine).
+                        # Drop the stale entry so the path can be re-dispatched
+                        # — a thumbnail can never get permanently wedged.
+                        if Time.get_ticks_msec() - int(_thumb_pending[path]) < 10000: continue
+                        _thumb_pending.erase(path); _thumb_gen_ir_map.erase(path)
                 if _thumb_perm_failed.has(path): continue
                 if not _can_preview_path(path): continue
 
@@ -532,72 +530,43 @@ func _check_visible_thumbnails()->void:
                 if not load_rect.intersects(ir.get_global_rect()): continue
 
                 var ir_id := ir.get_instance_id()
-                var is_heavy := _is_heavy_format(path)
 
-                if is_heavy:
-                        # ── TSCN / SCN: check disk cache first (may have been written ─────
-                        # by plugin.gd's scene-capture system OR a previous VP render)
-                        if _thumb_gen != null and _thumb_gen.has_disk_cache(path):
-                                var cached_tex: ImageTexture = _thumb_gen.load_disk_cache(path) as ImageTexture
-                                if cached_tex != null:
-                                        _thumb_cache_set(path, cached_tex)
-                                        _set_texture_safely(path, cached_tex, ir_id)
-                                        continue
-                        if _thumb_gen == null: continue
-                        if _thumb_gen_ir_map.has(path): continue   # already queued in renderer
-                        _thumb_pending[path] = "heavy"
-                        _thumb_heavy_count += 1
-                        _thumb_gen_ir_map[path] = ir_id
-                        _thumb_gen.enqueue(path)
-                else:
-                        # ── Light formats (.glb/.gltf/etc): EditorResourcePreview ─────────
-                        if light_pending_count >= MAX_PENDING: break
-                        _thumb_pending[path] = "light"
-                        light_pending_count += 1
-                        dispatched_light += 1
-                        EditorInterface.get_resource_previewer().queue_resource_preview(
-                                path, self, "_on_thumb_ready",
-                                {"path": path, "ir_id": ir_id, "gen": _browser_generation})
+                # ── Disk cache first (any format — instant PNG load) ──────────
+                if _thumb_gen != null and _thumb_gen.has_disk_cache(path):
+                        if cache_loads >= MAX_CACHE_LOADS: break   # spread decode cost — no spikes
+                        var cached_tex: ImageTexture = _thumb_gen.load_disk_cache(path) as ImageTexture
+                        cache_loads += 1
+                        if cached_tex != null:
+                                _thumb_cache_set(path, cached_tex)
+                                _set_texture_safely(path, cached_tex, ir_id)
+                                continue
+                # ── Offline studio render (single unified queue) ──────────────
+                # rev 4: EVERY format goes through uap_thumb_gen now. The old
+                # light-format path fed cards the editor's small SQUARE previews
+                # — pillarboxed bars in the rectangular wells and blurry upscale
+                # on big cards. Self-rendering gives every asset the same
+                # studio-lit, aspect-exact, disk-cached thumbnail.
+                if _thumb_gen == null: continue
+                if _thumb_gen_ir_map.has(path): continue   # already queued in renderer
+                _thumb_pending[path] = Time.get_ticks_msec()   # dispatch timestamp (stale-detect)
+                _thumb_heavy_count += 1
+                _thumb_gen_ir_map[path] = ir_id
+                _thumb_gen.enqueue(path)
+                dispatched += 1
 
 func _process_thumb_retries()->void:
         if _thumb_retry_queue.is_empty(): return
         var entry = _thumb_retry_queue.pop_front(); var ed = entry as Dictionary
         var path = ed["path"] as String; var ir_id = ed["ir_id"] as int
-        var att = ed.get("attempts",0) as int; var gen = ed.get("gen", _browser_generation) as int
+        var gen = ed.get("gen", _browser_generation) as int
         if gen != _browser_generation: return
-        var is_heavy = _is_heavy_format(path)
-        # Heavy formats are handled by _thumb_gen — never retry via EditorResourcePreview
-        if is_heavy:
-                if _thumb_gen != null and not _thumb_gen_ir_map.has(path) and not _thumb_cache.has(path):
-                        _thumb_pending[path] = "heavy"; _thumb_heavy_count += 1
-                        _thumb_gen_ir_map[path] = ir_id; _thumb_gen.enqueue(path)
-                return
-        if MAX_THUMBNAIL_RETRIES != -1 and att >= MAX_THUMBNAIL_RETRIES:
-                _thumb_perm_failed[path]=true; return
         if _thumb_cache.has(path): _set_texture_safely(path, _thumb_cache[path], ir_id); return
-        _thumb_pending[path] = "light"
-        EditorInterface.get_resource_previewer().queue_resource_preview(
-                path, self, "_on_thumb_ready",
-                {"path": path, "ir_id": ir_id, "attempts": att+1, "gen": gen})
+        # Everything funnels through the offline studio renderer now.
+        if _thumb_gen != null and not _thumb_gen_ir_map.has(path):
+                _thumb_pending[path] = Time.get_ticks_msec(); _thumb_heavy_count += 1
+                _thumb_gen_ir_map[path] = ir_id; _thumb_gen.enqueue(path)
 
-func _on_thumb_ready(res_path:String, preview:Texture2D, small_preview:Texture2D, userdata:Variant)->void:
-        var ud := userdata as Dictionary; if ud==null: return
-        var req_path := ud.get("path",res_path) as String; var ir_id := ud.get("ir_id",0) as int
-        var gen := ud.get("gen", _browser_generation) as int
-        _thumb_pending.erase(req_path)
-        # Discard callbacks from a previous browser generation (stale page/filter)
-        if gen != _browser_generation: return
-        var tex:Texture2D = preview if preview!=null else small_preview
-        if tex!=null:
-                _thumb_cache_set(req_path,tex); _set_texture_safely(req_path,tex,ir_id)
-        else:
-                _thumb_retry_queue.append({
-                        "path": req_path, "ir_id": ir_id,
-                        "attempts": ud.get("attempts",0) as int,
-                        "gen": gen
-                })
-
-# Called by uap_thumb_gen when a scene thumbnail is ready (from ERP or VP render)
+# Called by uap_thumb_gen when a thumbnail is ready (offline studio render)
 func _on_thumb_gen_ready(path: String, tex: ImageTexture) -> void:
         var ir_id: int = _thumb_gen_ir_map.get(path, 0) as int
         _thumb_gen_ir_map.erase(path)
@@ -622,26 +591,26 @@ func _set_texture_safely(path:String, tex:Texture2D, ir_id:int)->void:
         var ir = instance_from_id(ir_id) as TextureRect
         if is_instance_valid(ir) and ir.get_meta("uap_path","") == path: _card_apply_texture(ir,tex)
 
-## 2.2: cards show thumbnails in a LANDSCAPE well, so the stretch mode has to
-## depend on what the texture actually is:
-##  • real rendered thumbnails (square, rendered at preview size) → keep-aspect
-##    centered: they scale down to the well height and pillarbox neatly, never
-##    stretched or cropped.
+## rev 4: real thumbnails are GENERATED at the well's exact aspect ratio, so
+## STRETCH_KEEP_ASPECT_COVERED fills the well edge-to-edge with zero bars.
+## COVERED is also the structural anti-bar guarantee: if a stale or mismatched
+## texture ever lands in a card anyway (different slider size, old cache), it
+## is centre-CROPPED by a hair instead of pillarboxed with black bars.
 ##  • small editor fallback icons (16-32px theme icons shown before a render
 ##    exists) → draw at native size, centered. Scaling those up to the well
 ##    height produced a huge blurry icon (spotted in the 2.2 editor run).
 func _card_apply_texture(ir:TextureRect, tex:Texture2D)->void:
         if ir==null or tex==null: return
-        # 2.5: native-size mode is only safe when the texture is small on BOTH
+        # native-size mode is only safe when the texture is small on BOTH
         # axes (theme fallback icons). A wide texture under the height limit
         # would have been drawn at native width and spilled over the card —
-        # now it keep-aspect scales like every real thumbnail. Combined with
+        # now it scales like every real thumbnail. Combined with
         # ir.clip_contents this makes thumbnail overflow structurally
         # impossible.
         var lim:=float(maxi(40,int(40*_es)))
         var ts:=tex.get_size()
         var native:bool=ts.x<lim and ts.y<lim
-        ir.stretch_mode=TextureRect.STRETCH_KEEP_CENTERED if native else TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+        ir.stretch_mode=TextureRect.STRETCH_KEEP_CENTERED if native else TextureRect.STRETCH_KEEP_ASPECT_COVERED
         ir.texture=tex
 
 func _thumb_cache_set(path:String, tex:Texture2D)->void:
@@ -754,19 +723,24 @@ func _set_preview_size(v:int)->void:
         _preview_size=clampi(v,int(54*_es),int(200*_es))
         if is_instance_valid(_preview_lbl): _preview_lbl.text="%dpx"%_preview_size
         if is_instance_valid(_thumb_gen):
-                var tier_changed:bool=_thumb_gen.call("set_preview_resolution",_preview_size)
-                if tier_changed:
-                        # Crossed into a different resolution tier — the in-memory cache
-                        # holds textures rendered for the OLD tier, so drop it and let
-                        # everything re-fetch (disk cache for that tier, if it already
-                        # exists from a previous visit at this size, or a fresh render).
+                var m:=_card_thumb_metrics(_preview_size)
+                var size_changed:bool=_thumb_gen.call("set_preview_metrics",m.x,m.y)
+                if size_changed:
+                        # Crossed into a different render size — the in-memory cache
+                        # holds textures rendered for the OLD size, so drop it and let
+                        # everything re-fetch (disk cache for that size, if it already
+                        # exists from a previous visit at this slider position, or a
+                        # fresh studio render).
                         _thumb_pending.clear(); _thumb_cache.clear(); _thumb_lru.clear()
+                        _thumb_gen_ir_map.clear()
+                        _thumb_gen.call("clear_queue")
         _save_config(); _rebuild_browser_now()
 
 func _update_columns()->void:
         if not is_instance_valid(_asset_grid) or not is_instance_valid(_asset_scroll): return
-        # 2.5: subtract the reserved right margin (favorite-star overhang zone)
-        # so the slot math matches the width the grid actually lays out in.
+        # _grid_rm is 0 since rev 4 (the favorite star sits fully inside the
+        # card, nothing overhangs the grid) — kept in the formula so a future
+        # reservation needs no re-derivation.
         var w:=_asset_scroll.size.x-float(_grid_rm)
         if w<20.0: w=browser_ui.size.x-4.0
         if w<20.0: w=180.0
@@ -1241,12 +1215,11 @@ func _build_browser_panel(root:VBoxContainer)->void:
         # makes every card bottom-heavy, so equal gaps read vertically cramped
         # ("upper row is very close to the bottom row").
         _asset_grid.add_theme_constant_override("h_separation",6); _asset_grid.add_theme_constant_override("v_separation",maxi(6,int(10*_es)))
-        # 2.5: the favorite star straddles each card's right edge (half of it
-        # sits OUTSIDE the card, per the user's mockup). Reserve a strip on
-        # the right of the scroll content so the LAST column's star can stick
-        # out without being clipped by the scroll view or covered by the
-        # vertical scrollbar.
-        _grid_rm=maxi(6,int(10*_es))
+        # rev 4: the favorite star sits FULLY INSIDE the card (pinned to the
+        # thumbnail's top-right corner) — nothing overhangs the grid anymore,
+        # so the old reserved right strip is gone. The wrapper stays as a
+        # zero-margin passthrough so the layout tree is unchanged.
+        _grid_rm=0
         var grid_margin:=MarginContainer.new()
         grid_margin.add_theme_constant_override("margin_left",0)
         grid_margin.add_theme_constant_override("margin_right",_grid_rm)
@@ -2637,6 +2610,18 @@ func _filtered_paths(filter:String)->Array:
                 if (p as String).get_file().to_lower().contains(lf): result.append(p)
         return result
 
+func _card_thumb_metrics(S:int)->Vector2i:
+        ## THE single source of truth for the thumbnail well's pixel size at a
+        ## given card size. Used by _add_card to build the well AND pushed into
+        ## the thumbnail generator (set_preview_metrics) so every thumbnail is
+        ## RENDERED at exactly the well's aspect ratio and ~1.5x its resolution
+        ## — that is what makes textures fill the well edge-to-edge with no
+        ## black bars at any preview size.
+        var pad:int=maxi(3,int(4*_es))          # inner padding inside the card
+        var lbl_h:int=maxi(14,int(17*_es))      # name row height
+        var sep:int=maxi(2,int(3*_es))          # gap thumb↔name
+        return Vector2i(S-2*pad, S-2*pad-lbl_h-sep)
+
 func _add_card(path:String)->void:
         # ── 2.2 square card design ────────────────────────────────────────────
         # Cards are now perfectly SQUARE cells: a landscape (rectangular)
@@ -2676,8 +2661,9 @@ func _add_card(path:String)->void:
         vb.mouse_filter=Control.MOUSE_FILTER_IGNORE; card.add_child(vb)
         # Thumbnail well: a slightly darker rectangular surface (same carved
         # language as the groups) that gives the landscape thumbnail a crisp
-        # frame. The texture keeps its aspect ratio inside it — square renders
-        # pillarbox neatly, never stretched or cropped.
+        # frame. Thumbnails are GENERATED at exactly this well's aspect ratio
+        # (see _card_thumb_metrics + set_preview_metrics), so the texture
+        # fills it edge-to-edge — no bars, no cropping.
         var well:=PanelContainer.new()
         var wsb:=StyleBoxFlat.new(); wsb.bg_color=C_WELL_BG; wsb.set_corner_radius_all(3)
         wsb.set_content_margin_all(0)
@@ -2693,27 +2679,19 @@ func _add_card(path:String)->void:
         # selected a card). IGNORE lets the click fall through to the card
         # itself, so the ENTIRE card is clickable: thumbnail, name, padding.
         well.mouse_filter=Control.MOUSE_FILTER_IGNORE
-        # 2.5: the well stops one extra `pad` short of the card's RIGHT edge,
-        # reserving the top-right corner zone for the favorite star — this is
-        # exactly the user's mockup, where the well's right inset is double
-        # the left one and the star sits clear of the thumbnail. The wrap is
-        # a plain MarginContainer: left stays at the card's pad, right adds
-        # the extra pad.
-        var well_wrap:=MarginContainer.new()
-        well_wrap.add_theme_constant_override("margin_left",0)
-        well_wrap.add_theme_constant_override("margin_right",pad)
-        well_wrap.add_theme_constant_override("margin_top",0)
-        well_wrap.add_theme_constant_override("margin_bottom",0)
-        well_wrap.mouse_filter=Control.MOUSE_FILTER_IGNORE
-        well_wrap.add_child(well)
-        vb.add_child(well_wrap)
+        # rev 4: the well spans the card's FULL inner width again. (2.5 rev 1-3
+        # stopped it one pad short of the right edge to reserve a star zone for
+        # the half-outside "corner badge" star — that design is gone: the star
+        # now sits fully inside ON the thumbnail's top-right corner, exactly
+        # like the user's green-check mockup.)
+        vb.add_child(well)
         # The well is remembered on the card so _card_apply_state() can tint it
         # blue/amber together with the card face (see 2.3 selection design).
         card.set_meta("uap_well",well)
-        var thumb_w:int=inner_w-pad   # 2.5: well is narrower by the star zone
+        var thumb_w:int=inner_w   # rev 4: full inner width (no star-zone reserve)
         var ir:=TextureRect.new(); ir.custom_minimum_size=Vector2(thumb_w,thumb_h)
         ir.expand_mode=TextureRect.EXPAND_IGNORE_SIZE
-        ir.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+        ir.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_COVERED
         # 2.5: belt-and-suspenders for the same overflow report — even if a
         # future stretch mode ever draws beyond the TextureRect's bounds, the
         # texture is clipped to them and can never sit "on top of the card".
@@ -2793,36 +2771,39 @@ func _add_card(path:String)->void:
         wrapper.add_child(card)
         # Favorite star: a SIBLING of `card` inside `wrapper`, not a child of
         # `card` — see the comment at the top of this function for why.
-        # 2.5 star placement — FINAL design taken literally from the user's
-        # mockup: the star is a CORNER BADGE, centered ON the card's top-right
-        # edge (half inside the card, half outside over the panel) and `fav_m`
-        # px below the top edge. Because the thumbnail well now stops an extra
-        # pad short of the right edge (see well_wrap above), the star's inner
-        # half lands in the reserved corner zone and NEVER overlaps the
-        # thumbnail image — the complaint from every previous round.
+        # rev 4 star placement — FINAL design taken literally from the user's
+        # green-check mockup: the star is pinned ON the THUMBNAIL's top-right
+        # corner, fully INSIDE the card. Its top edge lines up with the well's
+        # top edge and its right edge with the well's right edge (both are
+        # `pad` inside the card's edges, because the card's stylebox content
+        # margin is the same `pad` on every side) — so the star sits exactly
+        # on the thumbnail's corner, never overflows the card, and never
+        # floats in the gap between cards (the red-X complaint). It overlaps
+        # the thumbnail's corner on purpose; legibility over any thumbnail is
+        # handled by the dark outline baked into the texture via
+        # UAPIcons.get_icon_outlined().
         #
-        # 2.5 CONTROL TYPE — TextureButton, not Button. THIS was the real,
-        # root cause of "the star position is wrong" reported in every round:
-        # a (flat, icon-only, StyleBoxEmpty-overridden) Button still inherits
-        # the editor theme's Button minimum size (measured 32x28 at es=1 in
-        # the 4.7.1 editor). Godot grows the control to its minimum size in
-        # the END direction, so the 16px button silently became a 32x28 rect
+        # CONTROL TYPE — TextureButton, not Button (kept from 2.5): a (flat,
+        # icon-only, StyleBoxEmpty-overridden) Button still inherits the
+        # editor theme's Button minimum size (measured 32x28 at es=1 in the
+        # 4.7.1 editor). Godot grows the control to its minimum size in the
+        # END direction, so the 16px button silently became a 32x28 rect
         # starting at its offset position — the ICON drew left-aligned inside
-        # that oversized rect, i.e. several px off the intended corner, half
-        # of it under the neighbouring card. TextureButton has no text, no
-        # font, no styleboxes: its minimum size is exactly its texture (and
-        # with ignore_texture_size, ZERO) — the offsets below are therefore
-        # the final rect, pixel-exact, on every editor theme.
+        # that oversized rect, i.e. several px off the intended corner. That
+        # was the real root cause of "the star position is wrong" in every
+        # earlier round. TextureButton has no text, no font, no styleboxes:
+        # with ignore_texture_size its minimum size is ZERO — the offsets
+        # below are therefore the final rect, pixel-exact, on every theme.
         var fav_btn:=TextureButton.new()
         var fav_size:=maxi(12,int(16*_es))
-        var fav_m:=maxi(4,int(8*_es))
+        var fav_m:int=pad   # same inset as the card padding → well's corner
         fav_btn.ignore_texture_size=true          # min size = 0: rect == offsets
         fav_btn.stretch_mode=TextureButton.STRETCH_SCALE
         fav_btn.anchor_left=1.0; fav_btn.anchor_right=1.0
         fav_btn.anchor_top=0.0;  fav_btn.anchor_bottom=0.0
-        fav_btn.offset_left=-int(fav_size/2)      # half inside  the card
-        fav_btn.offset_right=int(fav_size/2)       # half outside the card
-        fav_btn.offset_top=fav_m
+        fav_btn.offset_left=-(fav_m+fav_size)     # fully inside the card
+        fav_btn.offset_right=-fav_m               # right edge == well's right edge
+        fav_btn.offset_top=fav_m                  # top edge    == well's top edge
         fav_btn.offset_bottom=fav_m+fav_size
         # Legibility over any thumbnail is handled by a dark outline baked
         # directly into the texture via UAPIcons.get_icon_outlined().

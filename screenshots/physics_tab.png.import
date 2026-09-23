@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b7sp1neuak4r5"
-path="res://.godot/imported/spline_tab.png-cf08891dd0574a4a1f32d9dc780c19fb.ctex"
+uid="uid://cilxtbisag3qq"
+path="res://.godot/imported/physics_tab.png-707c0ca4382be4d152f9988a80089334.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://screenshots/spline_tab.png"
-dest_files=["res://.godot/imported/spline_tab.png-cf08891dd0574a4a1f32d9dc780c19fb.ctex"]
+source_file="res://screenshots/physics_tab.png"
+dest_files=["res://.godot/imported/physics_tab.png-707c0ca4382be4d152f9988a80089334.ctex"]
 
 [params]
 

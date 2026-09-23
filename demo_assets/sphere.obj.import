@@ -3,12 +3,15 @@
 importer="wavefront_obj"
 importer_version=1
 type="Mesh"
-uid="uid://b4rn0cw7dew8i"
-valid=false
+uid="uid://cvbh5hxqmmf8n"
+path="res://.godot/imported/sphere.obj-21a11482e1a575fcb95f0bf98ec349f5.mesh"
 
 [deps]
 
+files=["res://.godot/imported/sphere.obj-21a11482e1a575fcb95f0bf98ec349f5.mesh"]
+
 source_file="res://demo_assets/sphere.obj"
+dest_files=["res://.godot/imported/sphere.obj-21a11482e1a575fcb95f0bf98ec349f5.mesh", "res://.godot/imported/sphere.obj-21a11482e1a575fcb95f0bf98ec349f5.mesh"]
 
 [params]
 

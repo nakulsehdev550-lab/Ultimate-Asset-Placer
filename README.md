@@ -20,28 +20,48 @@
 
 ## What's new in v2.5.0 — the star, fixed for real; quieter, tighter panel
 
-### The favorite star — root cause found and fixed
-Every previous round moved the star and it still looked wrong. The actual
-root cause was never the offsets: an icon-only `Button` inherits the editor
-theme's Button **minimum size (32×28 px)**, so Godot silently grew the star's
-16 px rect, drew the icon inside that oversized box and slid half of it under
-the neighbouring card. The star is now a `TextureButton` whose rect is
-**pixel-exact on every editor theme**.
+### The favorite star — pinned to the corner, fully inside the card
+Every previous round moved the star and it still looked wrong. Two real root
+causes were found and eliminated:
 
-- **New corner-badge design** (taken literally from the mockup): the star is
-  centered **on the card's top-right edge** — half inside the card, half
-  outside over the panel — a few pixels below the top edge.
-- The thumbnail well stops one padding short of the right edge, so the star
-  **never overlaps the thumbnail image**.
+1. An icon-only `Button` inherits the editor theme's Button **minimum size
+   (32×28 px)**, so Godot silently grew the star's 16 px rect and drew the
+   icon inside that oversized box. The star is now a `TextureButton` whose
+   rect is **pixel-exact on every editor theme**.
+2. The earlier "half outside the card" badge design let the star float in the
+   gap between cards. Per the final mockup, the star is now **pinned ON the
+   thumbnail's top-right corner, fully INSIDE the card** — top edge aligned
+   with the thumbnail's top edge, right edge with its right edge. It can
+   never overflow the card, at any card size (verified by a geometry probe
+   on rendered screenshots at five different card sizes).
+
 - Favorited stars are **gold**; unfavorited stars are dim white and brighten
   on hover.
 
-![Asset cards with corner-badge stars](screenshots/asset_cards.png)
+![Asset cards with corner stars](screenshots/asset_cards.png)
 
-### Thumbnails can never spill onto cards again
-Thumbnail drawing is now **clipped to its well**, and the native-size stretch
-mode is only used for genuinely tiny fallback icons — a texture can no longer
-be drawn at native size across the card face.
+### Thumbnails rebuilt: rectangular, sharp, fast — no more black bars
+The whole thumbnail pipeline was rebuilt around the card's rectangular
+thumbnail area:
+
+- **Generated at the exact well aspect ratio** — every thumbnail is rendered
+  by the plugin's own isolated studio SubViewport sized precisely like the
+  card's thumbnail area, so images **fill the frame edge-to-edge**: no black
+  bars, no letterboxing, no cropping, at any card size.
+- **Resolution scales with the card size** — the render is ~1.5× the on-screen
+  size (snapped to quality tiers up to 320 px), so enlarged cards show genuinely
+  sharper thumbnails instead of upscaled blurry squares.
+- **Every format gets the same studio treatment** — scenes (.tscn), imported
+  models (.glb/.gltf/.fbx) and bare meshes (.obj/.dae) are all lit by the same
+  three-point studio rig on one consistent background. The editor's small
+  square previews are no longer used for the browser.
+- **Faster and cache-friendly** — renders are disk-cached per size
+  (`user://uap_thumbnails/assets_r3/`), so each asset renders once per size;
+  later visits and sessions load instantly. The old square cache is cleaned up
+  automatically. The queue stays throttled (one render at a time, off the
+  interaction path) so browsing never stutters.
+- Thumbnail drawing stays **clipped to its well**, and a centre-cover stretch
+  makes bar-shaped artifacts structurally impossible even for stale textures.
 
 ### Docs always opens at the Welcome chapter
 The **Docs button on the rail** now always opens **“Welcome & Quick Start”** —

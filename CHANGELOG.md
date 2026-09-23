@@ -8,6 +8,38 @@ Welcome again, and the panel got quieter and tighter. Verified against a real
 Godot 4.7.1 editor with a 40-step automated harness (assertions + rendered
 screenshots inspected by hand), zero script errors and zero audit fails.
 
+#### Update (2.5.0 rev 4) — rectangular studio thumbnails + corner-pinned star
+- **Thumbnails are now generated at the exact aspect ratio of the card's
+  rectangular thumbnail well** by the plugin's own isolated SubViewport
+  "studio": no black bars, no letterboxing, no pillarboxing, at any card
+  size. The old generator smart-cropped and letterboxed everything onto a
+  square transparent canvas — the direct source of the black bars.
+- **Resolution now scales with the preview-size slider** (render = ~1.5× the
+  on-screen size, tiers 64→320): big cards get genuinely sharp thumbnails.
+  The editor's small square previews (which caused the low-res complaint)
+  are no longer used for the browser at all.
+- **All formats unified**: .tscn scenes, .glb/.gltf/.fbx PackedScenes and
+  bare .obj/.dae Mesh resources all render through the same studio queue
+  (bare meshes are wrapped in a MeshInstance3D). Node2D/Control scenes route
+  to the 2D studio automatically.
+- **Disk cache v3** keyed per exact render size (`user://uap_thumbnails/
+  assets_r3/`), legacy square cache purged on startup; display uses
+  `STRETCH_KEEP_ASPECT_COVERED` so bar-shaped artifacts are structurally
+  impossible even for stale textures.
+- **Speed**: EditorResourcePreview round-trips and per-pixel smart-crop scans
+  removed; renders are throttled one-at-a-time off the interaction path.
+- **Star placement reworked per the final mockup**: fully inside the card,
+  pinned ON the thumbnail's top-right corner (right/top edges aligned with
+  the well); the "half outside" badge and the reserved star zone are gone —
+  the thumbnail well spans the full card width again and the grid no longer
+  reserves a star overhang strip.
+- **Fixed a render-queue re-entrancy race** that could silently drop one
+  asset's thumbnail per size change (it stayed "pending" forever); a
+  10-second stale-pending safety net now re-dispatches any lost render.
+- Verified with a 63-step harness: aspect-exact renders at 54/96/120/128/176/
+  200 px cards, 7/7 textures at every size, star geometry probe, zero script
+  errors; rendered screenshots inspected by hand at every scale.
+
 ### The favorite star — root cause found and fixed
 - An icon-only `Button` inherits the editor theme's Button **minimum size**
   (measured 32×28 px at editor scale 1.0 in the 4.7.1 editor), even with
