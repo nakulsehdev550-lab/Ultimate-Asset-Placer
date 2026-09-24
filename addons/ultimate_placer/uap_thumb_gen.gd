@@ -335,6 +335,7 @@ func _vp_render_path(path: String) -> void:
 
         # ── 2D / non-3D scene → route to the 2D studio queue ──────────────────
         if not (inst is Node3D):
+                _clear_override_slots(inst)
                 inst.queue_free()
                 var routed := _cur_path
                 _cur_path = ""; _active = false
@@ -368,6 +369,13 @@ func _evict() -> void:
         if is_instance_valid(_cur_inst):
                 if is_instance_valid(_vp) and _cur_inst.get_parent() == _vp:
                         _vp.remove_child(_cur_inst)
+                # Godot bug #85817 hardening: assets routinely reference SHARED
+                # materials via override slots (material_override + per-surface
+                # overrides). Deleting such an instance makes the renderer's
+                # deferred update process the now-dangling RIDs and spam
+                # "Parameter material is null" four times per instance. Wipe
+                # the override slots while the instance is still alive.
+                _clear_override_slots(_cur_inst)
                 _cur_inst.queue_free()
                 _cur_inst = null
         if is_instance_valid(_vp):
@@ -414,6 +422,7 @@ func _next_2d() -> void:
 
         # Only handle Node2D and Control scenes here
         if not (inst is Node2D or inst is Control):
+                _clear_override_slots(inst)
                 inst.queue_free(); _skip_current_2d(); return
 
         _silence_node(inst)
@@ -485,10 +494,25 @@ func _evict_2d() -> void:
         if is_instance_valid(_cur_inst_2d):
                 if is_instance_valid(_vp2d) and _cur_inst_2d.get_parent() == _vp2d:
                         _vp2d.remove_child(_cur_inst_2d)
+                # Same Godot bug #85817 hardening as _evict().
+                _clear_override_slots(_cur_inst_2d)
                 _cur_inst_2d.queue_free()
                 _cur_inst_2d = null
         if is_instance_valid(_vp2d):
                 _vp2d.render_target_update_mode = SubViewport.UPDATE_DISABLED
+
+## Wipes material_override / material_overlay / every per-surface override on
+## a node tree. See _evict() for the Godot bug #85817 rationale.
+func _clear_override_slots(node: Node) -> void:
+        if node is MeshInstance3D:
+                var mi := node as MeshInstance3D
+                if mi.material_override != null: mi.material_override = null
+                if mi.material_overlay != null: mi.material_overlay = null
+                var sc := mi.get_surface_override_material_count()
+                for i in sc:
+                        if mi.get_surface_override_material(i) != null:
+                                mi.set_surface_override_material(i, null)
+        for c in node.get_children(): _clear_override_slots(c)
 
 # ── 2D Camera Fitting ─────────────────────────────────────────────────────────
 func _fit_camera_2d(root: Node) -> void:

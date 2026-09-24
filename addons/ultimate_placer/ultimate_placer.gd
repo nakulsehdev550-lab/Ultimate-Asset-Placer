@@ -400,6 +400,12 @@ func _spawn_ghost(path: String) -> void:
 
 func _remove_ghost() -> void:
 	if is_instance_valid(_ghost):
+		# Godot bug #85817 hardening: the ghost carries SHARED ghost materials in
+		# override slots (multi-mesh assets get one per-mesh copy now, but older
+		# patterns and the asset's own pre-existing overrides can still be
+		# shared). Wipe the override slots while the instance is alive so the
+		# renderer never processes dangling material RIDs for this node.
+		_clear_override_slots(_ghost)
 		# queue_free() is deferred, not immediate — if a new ghost is spawned
 		# within the same frame (e.g. rapidly switching assets), the old one
 		# would still technically be in the tree and collide on name with the
@@ -495,6 +501,34 @@ func _colorize_ghost(node: Node) -> void:
 			else:
 				for i in sc: mi.set_surface_override_material(i, mat)
 	for c in node.get_children(): _colorize_ghost(c)
+
+## Wipes every material OVERRIDE slot on a whole node tree (material_override,
+## material_overlay and every per-surface override) WITHOUT touching the
+## mesh's own baked-in surface materials. Call this on a node tree RIGHT
+## BEFORE queue_free()ing it.
+##
+## WHY THIS EXISTS — Godot engine bug godotengine/godot#85817 (open, Forward+):
+## when geometry instances that reference a SHARED material via override
+## slots are deleted, the renderer's deferred instance update still processes
+## the (now dangling) material RIDs and spams exactly these four errors per
+## dirty instance:
+##   material_casts_shadows            - Parameter "material" is null
+##   material_is_animated              - Parameter "material" is null
+##   material_get_instance_shader_parameters - Parameter "material" is null
+##   material_update_dependency        - Parameter "material" is null
+## Clearing the override slots while the instance is still alive empties its
+## RID references, so nothing dangles when the free lands. The visual is not
+## affected because the node is about to be deleted anyway.
+func _clear_override_slots(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		if mi.material_override != null: mi.material_override = null
+		if mi.material_overlay != null: mi.material_overlay = null
+		var sc := mi.get_surface_override_material_count()
+		for i in sc:
+			if mi.get_surface_override_material(i) != null:
+				mi.set_surface_override_material(i, null)
+	for c in node.get_children(): _clear_override_slots(c)
 
 func _build_grid(root: Node3D) -> void:
 	var gs := maxf(_get_float("grid_size"), 0.01); var gy := _get_float("grid_height")
@@ -762,6 +796,11 @@ func _find_placed_siblings(node: Node3D) -> Array:
 
 func _undo_place(placed_root: Node3D) -> void:
 	if not is_instance_valid(placed_root): return
+	# Godot bug #85817 hardening: placed instances can carry a SHARED override
+	# material (Replace mode) on top of the asset's own per-surface overrides —
+	# exactly the combination whose deletion spams "Parameter material is
+	# null". Clear the slots while the nodes are still alive.
+	_clear_override_slots(placed_root)
 	# For RigidBody mode placed_root IS the RigidBody3D wrapper — its mesh child
 	# and CollisionShape3D children are freed automatically with it, so no
 	# sibling lookup is needed or correct.
@@ -947,6 +986,9 @@ func _mm_get_or_create(path: String, root: Node) -> MultiMeshInstance3D:
 			var tmp := (res as PackedScene).instantiate(); if tmp == null: return null
 			var ms: Array[MeshInstance3D] = []; _collect_meshes(tmp, ms)
 			if not ms.is_empty() and ms[0].mesh != null: base_mesh = ms[0].mesh
+			# Godot bug #85817 hardening: this throwaway instance carries the
+			# asset's own override slots verbatim — clear them before freeing.
+			_clear_override_slots(tmp)
 			tmp.queue_free()
 
 		if base_mesh == null: return null
@@ -1030,6 +1072,16 @@ func _apply_material_override(node: Node, mat: Material, mode: int = 0) -> void:
 		else:
 			# Override mode: per-instance override — safe, does not affect other instances
 			mi.material_override = mat
+			# Replace means REPLACE — the docs promise "the original material is
+			# completely gone", so also wipe the per-surface override slots the
+			# asset brought with it (material_override already supersedes them
+			# visually). This ALSO removes the material_override + surface-override
+			# combination that triggers Godot bug #85817 ("Parameter material is
+			# null" spam) when the placed instance is later deleted.
+			var sc := mi.get_surface_override_material_count()
+			for i in sc:
+				if mi.get_surface_override_material(i) != null:
+					mi.set_surface_override_material(i, null)
 	for c in node.get_children(): _apply_material_override(c, mat, mode)
 
 func _add_collision(node: Node3D, btype: int, stype: int, unpack_scenes: bool) -> void:

@@ -20,6 +20,49 @@
 
 ## What's new in v2.5.0 — the star, fixed for real; quieter, tighter panel
 
+### Update (rev 5) — animated rating stars, tab reorder, material-error fix
+
+**Animated rating stars.** Five golden stars with crisp black borders now sit
+at the end of the group chip strip in the asset browser header. They run two
+continuous animations: the row **bobs up and down like a wave** (each star
+phase-shifted after its left neighbour), and the stars **light up from white
+to gold one by one, left to right** — once all five are gold they hold for a
+beat, **turn white together**, and the wave starts over. Clicking anywhere in
+the stars area opens the plugin's ratings page (`RATING_URL` in
+`ultimate_panel.gd` — one constant to repoint). The strip is a flow layout:
+the group chips wrap BEFORE the stars on the first line, and when the stars
+don't fit they hop to the second line as one block. The stars survive the
+collapsed header, scale with the editor scale, and redraw only while visible.
+
+![Rating stars in the group chip strip](screenshots/rating_stars.png)
+
+**Collision & Physics tabs moved up; Groups & Keys are now the last tabs.**
+The tab rail order is now Place, Transform, Paint, Spline, Material,
+**Collision, Physics, Groups, Keys**, with the Docs button still last on the
+rail. Every per-tab **(i)** help button follows the tabs to their new
+positions automatically.
+
+**"Parameter material is null" error spam — addressed.** Those four repeating
+rendering errors are Godot engine bug `godotengine/godot#85817`: geometry
+that references a **shared material through override slots** (a
+`material_override` shared with other meshes plus per-surface overrides)
+spams the errors when it is deleted, on Forward+. The plugin now removes
+every condition it controlled that can trigger it:
+
+- Every plugin teardown path (ghost removal, placed-asset delete, MultiMesh
+  temp instances, thumbnail studio evictions) **wipes override slots while
+  the nodes are still alive**, so the renderer never processes dangling
+  material handles.
+- **Replace material mode now truly replaces** — the asset's own per-surface
+  overrides are cleared too (as the docs always promised), which also
+  eliminates the exact override + surface-override combination the engine
+  bug needs.
+- A **duplicate-copy guard**: if a second copy of the addon is left in the
+  project (an old folder or stray zip extract — visible as the plugin
+  printing "Ready." twice at startup), the duplicate now refuses to boot
+  with a clear message telling you which path to remove, instead of running
+  a second panel + thumbnail studio alongside the real one.
+
 ### The favorite star — pinned to the corner, fully inside the card
 Every previous round moved the star and it still looked wrong. Two real root
 causes were found and eliminated:

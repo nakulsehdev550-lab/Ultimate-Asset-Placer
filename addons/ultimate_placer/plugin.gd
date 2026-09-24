@@ -44,6 +44,25 @@ func _enter_tree() -> void:
 	# and the whole plugin would fail to initialize.
 	var addon_root: String = get_script().resource_path.get_base_dir() + "/"
 
+	# ── Duplicate-copy guard ─────────────────────────────────────────────
+	# The plugin self-locates its folder, which keeps it working from any
+	# path — but that also means a SECOND copy of the addon left in the
+	# project (e.g. an old "addons/ultimate_asset_placer/" folder from a
+	# previous manual install, or a stray extracted zip) boots a complete
+	# second panel, second thumbnail studio and second placer alongside the
+	# real one. Users saw "[Ultimate Asset Placer ...] Ready." printed TWICE
+	# at editor startup — the fingerprint of exactly this situation. Two
+	# studios double the per-frame work and can trip renderer bugs, so the
+	# first copy loaded wins and this copy bows out with a loud, actionable
+	# message.
+	var _base_ctrl := get_editor_interface().get_base_control()
+	for existing in _base_ctrl.find_children("UAP_Manager*", "", true, false):
+		if is_instance_valid(existing) and existing.is_inside_tree() \
+					and not existing.is_queued_for_deletion():
+			print("[Ultimate Asset Placer] DUPLICATE COPY DETECTED — a copy of this plugin is already active in this editor session. Skipping the copy loaded from %s" % addon_root)
+			print("[Ultimate Asset Placer] FIX: Project Settings → Plugins → disable/remove the duplicate Ultimate Asset Placer entry (or delete the leftover addon folder), then restart the editor.")
+			return
+
 	DirAccess.make_dir_recursive_absolute(THUMB_CACHE_DIR)
 	_cleanup_orphaned_thumbnails()
 

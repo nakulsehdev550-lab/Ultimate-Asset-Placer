@@ -8,6 +8,43 @@ Welcome again, and the panel got quieter and tighter. Verified against a real
 Godot 4.7.1 editor with a 40-step automated harness (assertions + rendered
 screenshots inspected by hand), zero script errors and zero audit fails.
 
+#### Update (2.5.0 rev 5) — rating stars, tab reorder, material-error fix
+- **Animated rating stars** at the end of the group chip strip: five golden
+  stars with black borders that bob up and down like a wave (phase-shifted
+  left to right) and light up white→gold one by one, hold all-gold, fade back
+  to white together, and loop. Clicking anywhere in the stars area opens the
+  ratings page (`RATING_URL` constant in `ultimate_panel.gd`). The widget is
+  one atomic flow child — group chips wrap before it on line one and it hops
+  to line two as a block; it re-fits in the collapsed header, scales with the
+  editor scale, and only redraws while visible (a handful of polygon draws
+  per frame).
+- **Tab rail reordered: Collision and Physics now sit above Groups and
+  Keys** — Place, Transform, Paint, Spline, Material, Collision, Physics,
+  Groups, Keys, then the Docs button last. `TAB_DOCS_CHAPTER` and the rail
+  icon mapping follow the new positions; verified per-tab (i) deep links
+  (Place→4, Groups(7)→10, Physics(6)→9, Keys(8)→11).
+- **"Parameter material is null" spam addressed** — identified as the exact
+  four-function error cycle of Godot engine bug godotengine/godot#85817
+  (deleting geometry whose material_override is shared and also carries
+  per-surface overrides, Forward+). Plugin-side hardening:
+  - new `_clear_override_slots()` wipes material_override / material_overlay
+    / per-surface overrides while nodes are still alive on EVERY teardown
+    path: ghost removal, placed-asset delete (`_undo_place`), MultiMesh
+    temp instances, and both thumbnail-studio evictions (3D + 2D);
+  - Replace material mode now also clears the asset's own surface overrides
+    (matching the documented "original material is completely gone") which
+    removes the exact override + surface-override combination the engine bug
+    needs;
+  - **duplicate-copy guard**: a second copy of the addon in the project (the
+    "Ready." printed twice fingerprint) no longer boots a second panel +
+    studio; it prints which path to remove instead.
+- Regression harness extended to 71 steps: tab order + docs chapter audit,
+  rating stars (presence, last-child, 5 stars, animation clock, L→R color
+  wave math, click signal, cursor/tooltip, collapsed-header survival), a
+  shared-override-pattern asset driven through ghost / place+undo /
+  thumbnail-evict lifecycles with a strict zero "material is null" log
+  check, plus an animation frame sequence rendered into a video.
+
 #### Update (2.5.0 rev 4) — rectangular studio thumbnails + corner-pinned star
 - **Thumbnails are now generated at the exact aspect ratio of the card's
   rectangular thumbnail well** by the plugin's own isolated SubViewport

@@ -264,7 +264,7 @@ var _docs_was_open:bool=false             # rail highlight state helper
 
 # Tab rail icon names, index-aligned with the feature tabs built below
 # (Place, Transform, Paint, Spline, Material, Groups, Keys, Collision, Physics).
-const RAIL_ICON_NAMES := ["tab_place","tab_transform","tab_paint","tab_spline","tab_material","tab_groups","tab_keys","tab_collision","tab_physics"]
+const RAIL_ICON_NAMES := ["tab_place","tab_transform","tab_paint","tab_spline","tab_material","tab_collision","tab_physics","tab_groups","tab_keys"]
 
 # Shared style constants for the 3D tactile language:
 #  • raised  = active/selected  (full color, darker bottom edge, subtle drop shadow)
@@ -301,7 +301,12 @@ const C_BTN_STOP    := Color(0.48,0.34,0.08)   # dark amber   — stop/hold acti
 # Spline→"Spline Tab", Material→"Material & Collision",
 # Groups→"Groups & Favorites", Keys→"Keys & Shortcuts",
 # Collision→"Material & Collision", Physics→"Physics Tab".
-const TAB_DOCS_CHAPTER := [4,5,6,7,8,10,11,8,9]
+const TAB_DOCS_CHAPTER := [4,5,6,7,8,8,9,10,11]
+
+# Page opened when the user clicks the animated rating stars at the end of the
+# group chip strip. Swap this one constant to point the stars at a different
+# ratings page (e.g. the Godot Asset Library entry or an itch.io page).
+const RATING_URL := "https://github.com/nakulsehdev550-lab/Ultimate-Asset-Placer"
 
 var settings_ui:VBoxContainer=null; var browser_ui:VBoxContainer=null
 var _search_panel:VBoxContainer=null; var _folder_edit:LineEdit=null
@@ -1281,8 +1286,8 @@ func _build_settings_panel(root:VBoxContainer)->void:
         _settings_tabs.tabs_visible=false   # rail replaces the built-in tab bar
         right.add_child(_settings_tabs)
         _build_place_tab(); _build_transform_tab(); _build_paint_tab()
-        _build_spline_tab(); _build_material_tab(); _build_groups_tab()
-        _build_keys_tab(); _build_collision_tab(); _build_physics_tab()
+        _build_spline_tab(); _build_material_tab(); _build_collision_tab()
+        _build_physics_tab(); _build_groups_tab(); _build_keys_tab()
         # Docs is NOT a tab page anymore: the rail's docs button opens a
         # dedicated chapter-style window in the center of the screen.
         _build_docs_rail_button()
@@ -3271,6 +3276,7 @@ func _rebuild_group_bar()->void:
                                 if not _favorite_paths.has(p): _favorite_paths.append(p)
         _groups = _groups.filter(func(g): return (g as Dictionary)["name"] != "Favorites")
         for i in _groups.size(): _add_filter_btn((_groups[i] as Dictionary)["name"],i)
+        _build_rating_stars()
         if is_instance_valid(_group_drop):
                 _group_drop.clear(); _group_drop.add_icon_item(UAPIcons.get_icon("feature_favorite"), "Favorites")
                 for g in _groups: _group_drop.add_item((g as Dictionary)["name"])
@@ -3298,6 +3304,24 @@ func _tint_fav_chip(btn:Button)->void:
         btn.add_theme_color_override("icon_pressed_color",C_WARN)
         btn.add_theme_color_override("icon_hover_pressed_color",C_WARN.lightened(0.15))
         btn.add_theme_color_override("icon_focus_color",Color(0.60,0.63,0.72))
+
+## Appends the animated rating stars to the END of the group chip strip (2.5).
+## The strip is a FlowContainer: the group chips wrap BEFORE the stars on the
+## first line, and when the stars don't fit they hop onto the second line as
+## ONE atomic block (a single Control child can never split across lines) —
+## on the second line they simply never need to wrap again. Clicking the
+## stars area opens RATING_URL in the user's browser.
+func _build_rating_stars()->void:
+        var RatingStars := load(get_script().resource_path.get_base_dir() + "/uap_rating.gd")
+        if RatingStars == null: return
+        var stars:Control = RatingStars.new(_es)
+        stars.name = "UAP_RatingStars"
+        stars.activated.connect(_open_rating_page)
+        _group_bar.add_child(stars)
+
+func _open_rating_page()->void:
+        set_status("Opening the ratings page — thank you for rating Ultimate Asset Placer!", null)
+        OS.shell_open(RATING_URL)
 
 ## Keeps the filter-bar chips in sync with _active_group: exactly ONE chip
 ## reads as active at any time. (The pressed state of a toggle button is set
