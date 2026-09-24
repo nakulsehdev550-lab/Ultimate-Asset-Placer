@@ -303,10 +303,10 @@ const C_BTN_STOP    := Color(0.48,0.34,0.08)   # dark amber   — stop/hold acti
 # Collision→"Material & Collision", Physics→"Physics Tab".
 const TAB_DOCS_CHAPTER := [4,5,6,7,8,8,9,10,11]
 
-# Page opened when the user clicks the animated rating stars at the end of the
-# group chip strip. Swap this one constant to point the stars at a different
-# ratings page (e.g. the Godot Asset Library entry or an itch.io page).
-const RATING_URL := "https://github.com/nakulsehdev550-lab/Ultimate-Asset-Placer"
+# Page opened when the user clicks the animated rating stars pinned to the
+# right corner of the header title row. Swap this one constant to point the
+# stars at a different ratings page (itch.io rate page for the plugin).
+const RATING_URL := "https://choco-ted.itch.io/ultimate-asset-placer-godot-45-gd-script/rate?source=game"
 
 var settings_ui:VBoxContainer=null; var browser_ui:VBoxContainer=null
 var _search_panel:VBoxContainer=null; var _folder_edit:LineEdit=null
@@ -334,6 +334,11 @@ var _header_title_row:HBoxContainer=null; var _header_title_lbl:Label=null
 # collapse remains, and it keeps the group chips visible on the bar.
 var _header_collapsed:bool=false
 var _header_master_btn:Button=null; var _header_ver_lbl:Label=null
+# 2.5 rev 6: header layout — version label sits NEXT to the title text, and a
+# flexible spacer pushes the rating stars + collapse chevron to the RIGHT
+# CORNER. The stars are pinned there permanently (they are NOT part of the
+# group chip strip, so they never wrap or move with the group buttons).
+var _header_spacer:Control=null; var _rating_stars:Control=null
 var _status_bar_panel:PanelContainer=null
 var _rot_x_spin:SliderSpin=null; var _rot_y_spin:SliderSpin=null; var _rot_z_spin:SliderSpin=null
 var _grid_size_spin:SliderSpin=null; var _grid_h_spin:SliderSpin=null
@@ -1057,6 +1062,12 @@ func _apply_header_collapsed()->void:
         if is_instance_valid(_header_title_lbl): _header_title_lbl.visible=not collapsed
         if is_instance_valid(_status_bar_panel): _status_bar_panel.visible=not collapsed
         if is_instance_valid(_search_panel): _search_panel.visible=not collapsed
+        if is_instance_valid(_header_spacer):
+                # Expanded → spacer eats the free width (title+version hug the
+                # left, stars+chevron pin the right corner). Collapsed → the
+                # chip strip is EXPAND_FILL, so the spacer must give up its
+                # share or the chips would float with a hole in the middle.
+                _header_spacer.size_flags_horizontal=SIZE_FILL if collapsed else SIZE_EXPAND_FILL
         if is_instance_valid(_group_bar):
                 if collapsed:
                         if _group_bar.get_parent()!=_header_title_row:
@@ -1093,10 +1104,23 @@ func _build_header(root:VBoxContainer)->void:
         var bar:=ColorRect.new(); bar.color=C_ACCENT; bar.custom_minimum_size=Vector2(3,0)
         bar.size_flags_vertical=SIZE_EXPAND_FILL; tr.add_child(bar)
         var tl:=Label.new(); tl.text="Ultimate Asset Placer"; tl.add_theme_color_override("font_color",C_HEAD)
-        tl.size_flags_horizontal=SIZE_EXPAND_FILL; tl.clip_text=true; tr.add_child(tl)
+        # 2.5 rev 6: the title NO LONGER expands across the bar — it hugs the
+        # left edge so the version label can sit right next to the text, and a
+        # flexible spacer pushes the rating stars + chevron to the right corner.
+        # NOTE: clip_text must stay OFF here — a clipping label's minimum width
+        # collapses to ~1 glyph, which would render the title as just "U".
+        tr.add_child(tl)
         _header_title_lbl=tl
         _header_ver_lbl=Label.new(); _header_ver_lbl.text=UAPIcons.get_plugin_version(); _header_ver_lbl.add_theme_color_override("font_color",C_DIM)
-        _header_ver_lbl.size_flags_horizontal=SIZE_SHRINK_END; tr.add_child(_header_ver_lbl)
+        _header_ver_lbl.tooltip_text="Ultimate Asset Placer version"
+        tr.add_child(_header_ver_lbl)
+        # Flexible spacer: expanded → eats all free width so stars+chevron pin
+        # the right corner; collapsed → shrinks away so the chip strip takes it.
+        _header_spacer=Control.new(); _header_spacer.size_flags_horizontal=SIZE_EXPAND_FILL
+        tr.add_child(_header_spacer)
+        # Animated rating stars — pinned to the RIGHT CORNER (where the version
+        # label used to sit), before the collapse chevron. Never in the chips.
+        _build_rating_stars()
         _header_master_btn=Button.new(); _header_master_btn.flat=true
         _header_master_btn.focus_mode=Control.FOCUS_NONE
         _header_master_btn.size_flags_horizontal=SIZE_SHRINK_END
@@ -3276,7 +3300,9 @@ func _rebuild_group_bar()->void:
                                 if not _favorite_paths.has(p): _favorite_paths.append(p)
         _groups = _groups.filter(func(g): return (g as Dictionary)["name"] != "Favorites")
         for i in _groups.size(): _add_filter_btn((_groups[i] as Dictionary)["name"],i)
-        _build_rating_stars()
+        # (2.5 rev 6) the rating stars are NOT part of the chip strip anymore —
+        # they are built once by _build_header() and pinned to the header's
+        # right corner, so rebuilding the chips never touches them.
         if is_instance_valid(_group_drop):
                 _group_drop.clear(); _group_drop.add_icon_item(UAPIcons.get_icon("feature_favorite"), "Favorites")
                 for g in _groups: _group_drop.add_item((g as Dictionary)["name"])
@@ -3305,19 +3331,25 @@ func _tint_fav_chip(btn:Button)->void:
         btn.add_theme_color_override("icon_hover_pressed_color",C_WARN.lightened(0.15))
         btn.add_theme_color_override("icon_focus_color",Color(0.60,0.63,0.72))
 
-## Appends the animated rating stars to the END of the group chip strip (2.5).
-## The strip is a FlowContainer: the group chips wrap BEFORE the stars on the
-## first line, and when the stars don't fit they hop onto the second line as
-## ONE atomic block (a single Control child can never split across lines) —
-## on the second line they simply never need to wrap again. Clicking the
-## stars area opens RATING_URL in the user's browser.
+## Builds the animated rating stars ONCE and pins them to the RIGHT CORNER of
+## the header title row (2.5 rev 6) — between the flexible spacer and the
+## collapse chevron, exactly where the version label used to sit. The stars
+## are NOT a child of the group chip strip: they never wrap with the group
+## buttons and they never move when the collapse toggles — the chips come and
+## go around them while the stars stay pinned. Clicking the stars area opens
+## RATING_URL in the user's browser.
 func _build_rating_stars()->void:
+        if is_instance_valid(_rating_stars): return
         var RatingStars := load(get_script().resource_path.get_base_dir() + "/uap_rating.gd")
         if RatingStars == null: return
         var stars:Control = RatingStars.new(_es)
         stars.name = "UAP_RatingStars"
         stars.activated.connect(_open_rating_page)
-        _group_bar.add_child(stars)
+        _rating_stars = stars
+        _header_title_row.add_child(stars)
+        # Keep the stars BEFORE the collapse chevron (right corner of the row).
+        if is_instance_valid(_header_master_btn):
+                _header_title_row.move_child(stars, _header_title_row.get_child_index(_header_master_btn))
 
 func _open_rating_page()->void:
         set_status("Opening the ratings page — thank you for rating Ultimate Asset Placer!", null)

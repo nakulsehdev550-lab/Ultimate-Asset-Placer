@@ -2,10 +2,14 @@ extends Control
 
 ## Ultimate Asset Placer — Rating Stars (2.5)
 ##
-## Five golden stars with crisp black borders that live at the end of the
-## group/filter chip strip in the asset browser header. The strip is a
-## FlowContainer, so the chips wrap BEFORE the stars on the first line and
-## the stars hop onto the second line as one atomic block (they never split).
+## Five golden stars with crisp black borders pinned to the RIGHT CORNER of
+## the header title row in the asset browser (2.5 rev 6) — between the
+## flexible spacer and the collapse chevron, exactly where the version label
+## used to sit. They are NOT part of the group/filter chip strip: they never
+## wrap with the group buttons and they never move when the collapse toggles.
+## The chip strip (a FlowContainer) comes and goes around them — in the
+## collapsed state it even moves INTO this same title row — while the stars
+## simply stay pinned in place.
 ##
 ## The stars run two continuous, always-smooth animations:
 ##   1. BOB WAVE   — every star floats up and down on a sine wave, phase-
@@ -61,11 +65,11 @@ var _es: float = 1.0
 func _init(es: float = 1.0) -> void:
         _es = maxf(0.6, es)
         mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-        size_flags_vertical = Control.SIZE_FILL          # stretch to the chip row height
+        size_flags_vertical = Control.SIZE_FILL          # stretch to the title-row height
         tooltip_text = "Rate Ultimate Asset Placer — click to open the ratings page"
-        # Height floor: the FlowContainer line already matches the chip height, but
-        # a zero min-height child could be collapsed by some layout paths — the
-        # floor keeps the stars visible (and RESIZED re-fits if the line is taller).
+        # Height floor: the header title row is driven by the chevron button,
+        # but a zero min-height child could be collapsed by some layout paths —
+        # the floor keeps the stars visible (and RESIZED re-fits to the row).
         custom_minimum_size = Vector2(_total_width(), _min_height())
 
 func _min_height() -> float: return 24.0 * _es
@@ -90,9 +94,9 @@ func _notification(what: int) -> void:
 func _rebuild_geometry() -> void:
         var h := size.y
         if h <= 0.0: h = _min_height()
-        # Fit the stars to whatever row height the FlowContainer gives us (the
-        # collapsed header row is shorter than the chip strip) but never let them
-        # grow beyond the designed resting size.
+        # Fit the stars to whatever row height the header gives us (the title
+        # row is sized by the chevron button / chip strip when collapsed) but
+        # never let them grow beyond the designed resting size.
         var r: float = minf((h - 6.0 * _es) * 0.5, 9.2 * _es)
         r = maxf(r, 4.0)
         _base_r = r

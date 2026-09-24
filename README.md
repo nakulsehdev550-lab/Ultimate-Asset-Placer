@@ -20,21 +20,35 @@
 
 ## What's new in v2.5.0 — the star, fixed for real; quieter, tighter panel
 
+### Update (rev 6) — rating stars pinned to the header corner; version next to the title
+
+**The rating stars now live permanently in the panel header's right corner.**
+They are no longer part of the group chip strip: instead of wrapping around
+with the group buttons, the five golden stars sit **always pinned to the
+right corner of the title row** — exactly where the version label used to be,
+just left of the collapse chevron. Add as many groups as you like: the chips
+wrap onto extra lines while the stars never move, and toggling the panel
+collapse doesn't move them either (the chip strip slides into the same title
+row around them). Clicking the stars opens the plugin's **itch.io ratings
+page** so you can leave a rating.
+
+**The version label moved next to the title.** The header now reads
+"Ultimate Asset Placer  2.5.0" on the left edge, freeing the right corner for
+the stars.
+
+![Rating stars pinned to the header corner](screenshots/rating_stars.png)
+
 ### Update (rev 5) — animated rating stars, tab reorder, material-error fix
 
-**Animated rating stars.** Five golden stars with crisp black borders now sit
-at the end of the group chip strip in the asset browser header. They run two
-continuous animations: the row **bobs up and down like a wave** (each star
-phase-shifted after its left neighbour), and the stars **light up from white
-to gold one by one, left to right** — once all five are gold they hold for a
-beat, **turn white together**, and the wave starts over. Clicking anywhere in
-the stars area opens the plugin's ratings page (`RATING_URL` in
-`ultimate_panel.gd` — one constant to repoint). The strip is a flow layout:
-the group chips wrap BEFORE the stars on the first line, and when the stars
-don't fit they hop to the second line as one block. The stars survive the
-collapsed header, scale with the editor scale, and redraw only while visible.
-
-![Rating stars in the group chip strip](screenshots/rating_stars.png)
+**Animated rating stars.** Five golden stars with crisp black borders in the
+asset browser header run two continuous animations: the row **bobs up and
+down like a wave** (each star phase-shifted after its left neighbour), and
+the stars **light up from white to gold one by one, left to right** — once
+all five are gold they hold for a beat, **turn white together**, and the wave
+starts over. Clicking anywhere in the stars area opens the plugin's ratings
+page (`RATING_URL` in `ultimate_panel.gd` — one constant to repoint). The
+stars scale with the editor scale and redraw only while visible. *(rev 6
+update: they moved from the chip strip to the header's right corner.)*
 
 **Collision & Physics tabs moved up; Groups & Keys are now the last tabs.**
 The tab rail order is now Place, Transform, Paint, Spline, Material,

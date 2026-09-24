@@ -8,6 +8,28 @@ Welcome again, and the panel got quieter and tighter. Verified against a real
 Godot 4.7.1 editor with a 40-step automated harness (assertions + rendered
 screenshots inspected by hand), zero script errors and zero audit fails.
 
+#### Update (2.5.0 rev 6) — rating stars pinned to the header corner
+- **The rating stars are no longer part of the group chip strip.** They now
+  sit **permanently pinned to the right corner of the header title row** —
+  exactly where the version label used to be, just left of the collapse
+  chevron. Group chips never push them around: with any number of groups the
+  chips wrap onto extra lines while the stars stay put, and toggling the
+  panel collapse doesn't move them either (the chip strip slides into the
+  same title row around the pinned stars).
+- **Version label moved next to the title** — the header reads
+  "Ultimate Asset Placer  2.5.0" on the left edge (the title label no longer
+  stretches across the bar; a flexible spacer pins the stars + chevron to
+  the right corner and gives way to the chip strip when collapsed).
+- **Ratings URL is now the plugin's itch.io rate page**
+  (`https://choco-ted.itch.io/ultimate-asset-placer-godot-45-gd-script/rate`)
+  — clicking the stars takes you straight to leaving a rating. Still one
+  swappable constant (`RATING_URL` in `ultimate_panel.gd`).
+- Harness: rating checks rewritten for the pinned layout (stars in the title
+  row, right edge == chevron left edge − separation, NOT inside the chip
+  strip, version label immediately right of the title text, pinned-pin
+  re-verified in the collapsed state) + a group-wrap stress step that adds
+  nine temp groups and proves the stars stay pinned while the chips wrap.
+
 #### Update (2.5.0 rev 5) — rating stars, tab reorder, material-error fix
 - **Animated rating stars** at the end of the group chip strip: five golden
   stars with black borders that bob up and down like a wave (phase-shifted
