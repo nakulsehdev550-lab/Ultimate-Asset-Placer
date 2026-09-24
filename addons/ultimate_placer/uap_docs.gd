@@ -128,10 +128,19 @@ By default, placed assets become children of the scene root. You can override th
 
 [color=#46a0f5][b]Grid & Snapping[/b][/color]
 [b]Show Grid[/b]  — Toggles the visual grid lines in the viewport.
-[b]Snap to Grid[/b]  — Enables or disables XZ position snapping.
+[b]Snap to Grid[/b]  — Enables or disables XZ position snapping on the floor grid.
 [b]Grid Size[/b]  — Grid cell size in metres. Range: 0.0625 m to 200 m.
 [b]Grid Y[/b]  — Height of the grid plane. Step buttons nudge it by one grid unit.
 [b]1m button[/b]  — Instantly resets Grid Size to 1.0 metre.
+
+[color=#46a0f5][b]Axis Wall Grids (X / Z)[/b][/color]
+Two optional VERTICAL grids that snap objects onto wall planes — perfect for windows, wall torches, shelves, signs and anything else that lives on a vertical surface. Each axis grid toggles on/off individually, and when several are enabled the plane closest to the camera under your mouse wins automatically.
+[b]X Axis Grid[/b]  — Wall grid on the XY plane, drawn in ORANGE. Snaps X + Y to Grid Size; Z stays locked to the wall's Pos Z.
+[b]X Size / X Pos Z / X Center Y[/b]  — The wall's half-extent, its depth position along Z, and its vertical centre.
+[b]Z Axis Grid[/b]  — Wall grid on the ZY plane, drawn in GREEN. Snaps Z + Y to Grid Size; X stays locked to the wall's Pos X.
+[b]Z Size / Z Pos X / Z Center Y[/b]  — The same three controls for the Z wall.
+
+Wall grids appear in Grid mode together with the blue floor grid (and respect the master Show Grid toggle), and paint-mode scatter spreads stamps ALONG the active wall instead of off it.
 
 [color=#46a0f5][b]Height Offset[/b][/color]
 Adds a fixed vertical offset to every placed asset. Use positive values to float objects above a surface, negative to push them into it (e.g. flowers sinking into grass).
@@ -725,8 +734,10 @@ Snaps your asset to a visible XZ grid. Set the cell size (e.g. 1 m, 0.5 m) and e
 [b]Grid Size[/b]  — Cell size in metres (0.0625 m to 200 m). Click [b]1m[/b] to quickly reset to 1 metre.
 [b]Grid Y[/b]  — The height of the grid plane. Use the [b]v[/b] and [b]^[/b] buttons to step it by one grid unit.
 [b]Show Grid toggle[/b]  — Hides or shows the blue grid lines (snap still works when hidden).
-[b]Snap to Grid toggle[/b]  — Disabling this makes Grid mode behave like Free mode (no XZ snap).
+[b]Snap to Grid toggle[/b]  — Disabling this makes the floor behave like Free mode (no XZ snap).
 [b]Layer Up / Layer Down keys[/b]  — Default [b]Home[/b] / [b]End[/b]. Moves the grid plane up or down by exactly one grid unit — great for multi-floor buildings.
+
+You can also enable the [b]X Axis Grid[/b] (orange XY wall) and the [b]Z Axis Grid[/b] (green ZY wall) from the Place tab. When several grids are on, whichever plane is closest to the camera under your mouse receives the placement — look at the floor to place on the floor, look at a wall to place on the wall.
 
 [color=#45e055][b]── SURFACE MODE ──[/b][/color]
 

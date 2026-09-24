@@ -194,6 +194,15 @@ var place_mode:int=1; var scroll_mode:int=0
 var grid_enabled:bool=true; var grid_size:float=1.0
 var grid_height:float=0.0; var height_offset:float=0.0
 var height_snap:bool=false; var show_grid:bool=true
+# 2.5 rev 7 — axis wall grids: vertical snap planes toggled individually.
+#   X grid = XY plane at z = x_grid_pos (snaps X + Y, orange lines)
+#   Z grid = ZY plane at x = z_grid_pos (snaps Z + Y, green lines)
+# Size = half-extent in metres, pos = offset along the perpendicular axis,
+# cy = vertical centre of the wall.
+var x_grid_enabled:bool=false; var x_grid_size:float=10.0
+var x_grid_pos:float=0.0; var x_grid_cy:float=0.0
+var z_grid_enabled:bool=false; var z_grid_size:float=10.0
+var z_grid_pos:float=0.0; var z_grid_cy:float=0.0
 var align_to_normal:bool=false; var vertex_snap_mesh:bool=false
 var vertex_snap_strength:float=42.0
 var rotation_snap_mode:int=1; var custom_snap_deg:float=15.0
@@ -339,6 +348,11 @@ var _header_master_btn:Button=null; var _header_ver_lbl:Label=null
 # CORNER. The stars are pinned there permanently (they are NOT part of the
 # group chip strip, so they never wrap or move with the group buttons).
 var _header_spacer:Control=null; var _rating_stars:Control=null
+# 2.5 rev 7 — retractable rating stars. The arrow button tucks the stars away
+# or reveals them again; the hidden state is SESSION-ONLY on purpose: opening
+# (or expanding) the asset browser always shows the stars by default.
+var _header_stars_btn:Button=null
+var _stars_hidden:bool=false
 var _status_bar_panel:PanelContainer=null
 var _rot_x_spin:SliderSpin=null; var _rot_y_spin:SliderSpin=null; var _rot_z_spin:SliderSpin=null
 var _grid_size_spin:SliderSpin=null; var _grid_h_spin:SliderSpin=null
@@ -1118,6 +1132,16 @@ func _build_header(root:VBoxContainer)->void:
         # the right corner; collapsed → shrinks away so the chip strip takes it.
         _header_spacer=Control.new(); _header_spacer.size_flags_horizontal=SIZE_EXPAND_FILL
         tr.add_child(_header_spacer)
+        # 2.5 rev 7: retractable rating stars — this little arrow tucks the
+        # stars away (» action_arrow_right) or brings them back (« 
+        # action_arrow_left). Row order stays: [spacer][retract][STARS][chevron],
+        # so the stars keep hugging the right corner when visible.
+        _header_stars_btn=Button.new(); _header_stars_btn.flat=true
+        _header_stars_btn.focus_mode=Control.FOCUS_NONE
+        UAPIcons.set_button_icon(_header_stars_btn, "action_arrow_right")
+        _header_stars_btn.tooltip_text="Hide rating stars"
+        _header_stars_btn.pressed.connect(_toggle_stars_hidden)
+        tr.add_child(_header_stars_btn)
         # Animated rating stars — pinned to the RIGHT CORNER (where the version
         # label used to sit), before the collapse chevron. Never in the chips.
         _build_rating_stars()
@@ -1126,7 +1150,12 @@ func _build_header(root:VBoxContainer)->void:
         _header_master_btn.size_flags_horizontal=SIZE_SHRINK_END
         tr.add_child(_header_master_btn)
         _header_master_btn.pressed.connect(func():
+                var was_collapsed:bool=_header_collapsed
                 _header_collapsed=not _header_collapsed
+                # Opening/expanding the browser ALWAYS brings the rating stars
+                # back — hiding them is a manual, session-only choice (rev 7).
+                if was_collapsed:
+                        _stars_hidden=false; _apply_stars_hidden()
                 _apply_header_collapsed(); _save_config())
         # 2.2: the "Search & Filters" collapse toggle is GONE — the folder,
         # search and group rows are always visible while the panel is expanded.
@@ -1497,6 +1526,32 @@ func _build_place_tab()->void:
         _grid_h_spin.value_changed.connect(_on_grid_h_changed); ghr.add_child(_grid_h_spin)
         var ld:=Button.new(); UAPIcons.set_button_icon(ld, "action_chevron_down"); ld.tooltip_text="Lower grid height"; ld.pressed.connect(func(): nudge_grid_height(-grid_size)); ghr.add_child(ld)
         var lu:=Button.new(); UAPIcons.set_button_icon(lu, "action_chevron_up"); lu.tooltip_text="Raise grid height"; lu.pressed.connect(func(): nudge_grid_height(grid_size)); ghr.add_child(lu)
+        # 2.5 rev 7 — axis wall grids, living in the grid group as requested.
+        # Each one toggles on/off individually: ON draws the wall grid in the
+        # viewport (Grid mode, respects the master Show Grid toggle) and lets
+        # objects snap onto that plane. With several enabled, the plane closest
+        # to the camera under the mouse wins.
+        _info(g,"Axis wall grids snap objects onto vertical planes — X grid = XY plane (orange), Z grid = ZY plane (green). With several on, the plane closest to the camera wins.")
+        _row_chk("X Axis Grid",g,x_grid_enabled,_on_x_grid_changed,"Wall grid on the XY plane — snaps X + Y, locks Z to Pos Z")
+        var xsr:=_row("X Size",g); var xss:=_ss(0.5,500.0,x_grid_size,0.5)
+        xss.value_changed.connect(_on_x_grid_size_changed); xsr.add_child(xss)
+        var xsu:=Label.new(); xsu.text="m"; xsu.add_theme_color_override("font_color",C_DIM); xsr.add_child(xsu)
+        var xpr:=_row("X Pos Z",g); var xps:=_ss(-500.0,500.0,x_grid_pos,0.5)
+        xps.value_changed.connect(_on_x_grid_pos_changed); xpr.add_child(xps)
+        var xpu:=Label.new(); xpu.text="m"; xpu.add_theme_color_override("font_color",C_DIM); xpr.add_child(xpu)
+        var xcr:=_row("X Center Y",g); var xcs:=_ss(-500.0,500.0,x_grid_cy,0.5)
+        xcs.value_changed.connect(_on_x_grid_cy_changed); xcr.add_child(xcs)
+        var xcu:=Label.new(); xcu.text="m"; xcu.add_theme_color_override("font_color",C_DIM); xcr.add_child(xcu)
+        _row_chk("Z Axis Grid",g,z_grid_enabled,_on_z_grid_changed,"Wall grid on the ZY plane — snaps Z + Y, locks X to Pos X")
+        var zsr:=_row("Z Size",g); var zss:=_ss(0.5,500.0,z_grid_size,0.5)
+        zss.value_changed.connect(_on_z_grid_size_changed); zsr.add_child(zss)
+        var zsu:=Label.new(); zsu.text="m"; zsu.add_theme_color_override("font_color",C_DIM); zsr.add_child(zsu)
+        var zpr:=_row("Z Pos X",g); var zps:=_ss(-500.0,500.0,z_grid_pos,0.5)
+        zps.value_changed.connect(_on_z_grid_pos_changed); zpr.add_child(zps)
+        var zpu:=Label.new(); zpu.text="m"; zpu.add_theme_color_override("font_color",C_DIM); zpr.add_child(zpu)
+        var zcr:=_row("Z Center Y",g); var zcs:=_ss(-500.0,500.0,z_grid_cy,0.5)
+        zcs.value_changed.connect(_on_z_grid_cy_changed); zcr.add_child(zcs)
+        var zcu:=Label.new(); zcu.text="m"; zcu.add_theme_color_override("font_color",C_DIM); zcr.add_child(zcu)
         var h:=_section(vb,"Height Offset")
         var hor:=_row("Offset Y",h); _height_spin=_ss(-500.0,500.0,height_offset,0.05)
         _height_spin.value_changed.connect(_on_height_changed); hor.add_child(_height_spin)
@@ -2428,6 +2483,15 @@ func _on_show_grid_changed(v:bool)->void: show_grid=v; if is_instance_valid(plac
 func _on_grid_enabled_changed(v:bool)->void: grid_enabled=v; _save_config()
 func _on_grid_size_changed(v:float)->void: grid_size=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
 func _on_grid_h_changed(v:float)->void: grid_height=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+# 2.5 rev 7 — axis wall grid handlers (rebuild so the wall lines follow live).
+func _on_x_grid_changed(v:bool)->void: x_grid_enabled=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_x_grid_size_changed(v:float)->void: x_grid_size=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_x_grid_pos_changed(v:float)->void: x_grid_pos=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_x_grid_cy_changed(v:float)->void: x_grid_cy=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_z_grid_changed(v:bool)->void: z_grid_enabled=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_z_grid_size_changed(v:float)->void: z_grid_size=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_z_grid_pos_changed(v:float)->void: z_grid_pos=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_z_grid_cy_changed(v:float)->void: z_grid_cy=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
 func _on_height_changed(v:float)->void: height_offset=v; _save_config()
 func _on_height_snap_changed(v:bool)->void: height_snap=v; _save_config()
 func _on_align_normal_changed(v:bool)->void: align_to_normal=v; _save_config(); if is_instance_valid(placer):placer.call("refresh_ghosts")
@@ -3355,6 +3419,20 @@ func _open_rating_page()->void:
         set_status("Opening the ratings page — thank you for rating Ultimate Asset Placer!", null)
         OS.shell_open(RATING_URL)
 
+## 2.5 rev 7 — tucks the rating stars behind the retract arrow (or reveals
+## them again). Session-only state on purpose: the asset browser ALWAYS opens
+## with the stars visible, and expanding the collapsed bar re-shows them too.
+func _toggle_stars_hidden()->void:
+        _stars_hidden = not _stars_hidden
+        _apply_stars_hidden()
+
+func _apply_stars_hidden()->void:
+        if is_instance_valid(_rating_stars): _rating_stars.visible = not _stars_hidden
+        if is_instance_valid(_header_stars_btn):
+                UAPIcons.set_button_icon(_header_stars_btn,
+                        "action_arrow_left" if _stars_hidden else "action_arrow_right")
+                _header_stars_btn.tooltip_text = "Show rating stars" if _stars_hidden else "Hide rating stars"
+
 ## Keeps the filter-bar chips in sync with _active_group: exactly ONE chip
 ## reads as active at any time. (The pressed state of a toggle button is set
 ## automatically on click, so the previously-active chip must be unpressed
@@ -3649,6 +3727,10 @@ func _save_config()->void:
         cfg.set_value("s","grid_size",grid_size); cfg.set_value("s","grid_height",grid_height)
         cfg.set_value("s","height_offset",height_offset); cfg.set_value("s","height_snap",height_snap)
         cfg.set_value("s","show_grid",show_grid); cfg.set_value("s","grid_enabled",grid_enabled)
+        cfg.set_value("s","x_grid_enabled",x_grid_enabled); cfg.set_value("s","x_grid_size",x_grid_size)
+        cfg.set_value("s","x_grid_pos",x_grid_pos); cfg.set_value("s","x_grid_cy",x_grid_cy)
+        cfg.set_value("s","z_grid_enabled",z_grid_enabled); cfg.set_value("s","z_grid_size",z_grid_size)
+        cfg.set_value("s","z_grid_pos",z_grid_pos); cfg.set_value("s","z_grid_cy",z_grid_cy)
         cfg.set_value("s","align_to_normal",align_to_normal); cfg.set_value("s","vertex_snap_mesh",vertex_snap_mesh)
         cfg.set_value("s","vertex_snap_strength",vertex_snap_strength)
         cfg.set_value("s","rot_snap",rotation_snap_mode); cfg.set_value("s","custom_deg",custom_snap_deg)
@@ -3711,6 +3793,14 @@ func _load_config()->void:
         height_snap           =cfg.get_value("s","height_snap",false)
         show_grid             =cfg.get_value("s","show_grid",true)
         grid_enabled          =cfg.get_value("s","grid_enabled",true)
+        x_grid_enabled        =cfg.get_value("s","x_grid_enabled",false)
+        x_grid_size           =cfg.get_value("s","x_grid_size",10.0)
+        x_grid_pos            =cfg.get_value("s","x_grid_pos",0.0)
+        x_grid_cy             =cfg.get_value("s","x_grid_cy",0.0)
+        z_grid_enabled        =cfg.get_value("s","z_grid_enabled",false)
+        z_grid_size           =cfg.get_value("s","z_grid_size",10.0)
+        z_grid_pos            =cfg.get_value("s","z_grid_pos",0.0)
+        z_grid_cy             =cfg.get_value("s","z_grid_cy",0.0)
         align_to_normal       =cfg.get_value("s","align_to_normal",false)
         vertex_snap_mesh      =cfg.get_value("s","vertex_snap_mesh",false)
         vertex_snap_strength  =cfg.get_value("s","vertex_snap_strength",42.0)

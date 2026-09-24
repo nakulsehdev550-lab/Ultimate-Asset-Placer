@@ -8,6 +8,33 @@ Welcome again, and the panel got quieter and tighter. Verified against a real
 Godot 4.7.1 editor with a 40-step automated harness (assertions + rendered
 screenshots inspected by hand), zero script errors and zero audit fails.
 
+#### Update (2.5.0 rev 7) — axis wall grids (X / Z) + retractable rating stars
+- **Axis wall grids.** Two optional VERTICAL snap grids join the floor grid in
+  Grid mode, each toggled on/off individually from the Grid & Snapping group
+  in the Place tab:
+  - **X Axis Grid** — the XY plane, drawn in **orange**. Snaps X + Y to Grid
+    Size; Z stays locked to the wall's **Pos Z**.
+  - **Z Axis Grid** — the ZY plane, drawn in **green**. Snaps Z + Y to Grid
+    Size; X stays locked to the wall's **Pos X**.
+  - Each wall customises **Size** (half-extent), **Pos** (depth along the
+    perpendicular axis) and **Center Y** (vertical centre), 0.5 m steps.
+  - With several grids enabled the **plane closest to the camera under the
+    mouse wins** — look at the floor to place on the floor, look at a wall to
+    place on the wall. Wall grids respect the master Show Grid toggle, and
+    paint-mode scatter spreads stamps ALONG the active wall instead of off it.
+- **"Snap to Grid" toggle fixed.** The Place-tab checkbox used to be a dead
+  control (Grid mode always snapped). It now genuinely enables/disables floor
+  snapping, exactly as the docs always promised. Default (ON) behaviour is
+  unchanged.
+- **Retractable rating stars.** A small arrow button left of the stars tucks
+  them away (» / «) without disturbing their pinned right-corner spot. The
+  hidden state is session-only: **opening/expanding the asset browser always
+  shows the stars again** — hiding is a manual, per-session choice.
+- Verified with a 76-step editor harness: UI sync, wall-vertex geometry,
+  nearest-plane ray math, snap-toggle behaviour, config persistence, retract
+  order/visibility/auto-show + full visual verification loop; zero script
+  errors, zero material-storage errors.
+
 #### Update (2.5.0 rev 6) — rating stars pinned to the header corner
 - **The rating stars are no longer part of the group chip strip.** They now
   sit **permanently pinned to the right corner of the header title row** —

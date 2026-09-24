@@ -9,6 +9,7 @@
 ## Highlights
 
 - **Four placement modes** — Free, Grid, Surface (physics raycast), and Vertex (mesh magnet snap).
+- **Axis wall grids** — optional X/Z vertical snap planes (orange XY wall / green ZY wall), each with its own size, position and on/off toggle; objects snap onto whichever enabled plane is under the mouse.
 - **Paint & volumetric brush** — drag-paint, circular brush with density/falloff, and mask textures.
 - **MultiMesh painting** — thousands of instances in a single draw call.
 - **Advanced spline system** — scatter props along curves or deform meshes into roads/rivers; terrain snapping; bake to nodes or MultiMesh.
@@ -19,6 +20,31 @@
 - **Asset Zoo** — lays out your whole library in a 3D grid for inspection.
 
 ## What's new in v2.5.0 — the star, fixed for real; quieter, tighter panel
+
+### Update (rev 7) — axis wall grids (X / Z) + retractable rating stars
+
+**Vertical snap grids are here.** Grid mode now supports two optional wall
+grids alongside the blue floor grid, each toggled on/off individually from
+the **Grid & Snapping** group in the Place tab: the **X Axis Grid** is the XY
+plane drawn in orange (snaps X + Y, locks Z to its Pos Z), and the **Z Axis
+Grid** is the ZY plane drawn in green (snaps Z + Y, locks X to its Pos X).
+Every wall customises its **Size** (half-extent), **Pos** (depth along the
+perpendicular axis) and **Center Y** (vertical centre). With several grids
+enabled, whichever plane is **closest to the camera under your mouse**
+receives the placement — look at the floor to place on the floor, look at a
+wall to place on the wall. Perfect for windows, wall torches, shelves, signs
+and any other vertical-surface work.
+
+**The rating stars are now retractable.** A small arrow button just left of
+the stars tucks them away or brings them back, without ever disturbing their
+pinned right-corner spot. Hiding is manual and session-only: opening or
+expanding the asset browser **always shows the stars again by default**.
+
+**Also fixed:** the **Snap to Grid** checkbox used to be a dead control —
+Grid mode always snapped regardless of its state. It now genuinely toggles
+floor snapping, exactly as documented (default ON behaviour is unchanged).
+
+![Axis wall grids in the Godot viewport](screenshots/axis_grids.png)
 
 ### Update (rev 6) — rating stars pinned to the header corner; version next to the title
 
