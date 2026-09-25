@@ -31,7 +31,14 @@ var _last_hit_kind: int = GridPlane.FLOOR
 var _is_placing:     bool    = false
 var _asset_path:     String  = ""
 var _ghost:          Node3D  = null
-var _grid_mesh:      MeshInstance3D = null
+## 2.5 rev 8 — the grid is three independent MeshInstance3D nodes (floor,
+## X wall, Z wall) so each plane can follow the viewport camera on its own
+## schedule. Lines are generated in LOCAL space; _update_grid_follow()
+## positions the nodes every frame.
+var _grid_mis:       Array   = []
+## Last camera that sent the plugin editor input — the viewport the user is
+## actually navigating. The grid follow logic prefers it over viewport 0.
+var _last_input_camera: Camera3D = null
 var _lmb_down:       bool    = false
 var _last_paint_pos: Vector3 = Vector3.ZERO
 var _last_world_pos: Vector3 = Vector3.ZERO
@@ -162,6 +169,7 @@ func instantiate_resource_pub(res: Resource) -> Node3D:
         return _instantiate_resource(res)
 
 func _process(delta: float) -> void:
+        _update_grid_follow()
         if not _is_placing or _held_keys.is_empty(): return
         for kc in _held_keys.keys():
                 var info: Dictionary = _held_keys[kc]
@@ -174,6 +182,7 @@ func _process(delta: float) -> void:
                         _apply_key_action(kc, info["shift"])
 
 func handle_input(camera: Camera3D, event: InputEvent) -> bool:
+        _last_input_camera = camera
         if not _is_placing: return false
 
         if event is InputEventMouseMotion:
@@ -597,71 +606,144 @@ func _clear_override_slots(node: Node) -> void:
         for c in node.get_children(): _clear_override_slots(c)
 
 func _build_grid(root: Node3D) -> void:
-        var gs := maxf(_get_float("grid_size"), 0.01); var gy := _get_float("grid_height")
-        var half := float(GRID_LINES/2)*gs; var im := ImmediateMesh.new()
-        im.surface_begin(Mesh.PRIMITIVE_LINES)
-        for i in range(-(GRID_LINES/2), (GRID_LINES/2)+1):
-                var c := Color(0.55,0.72,1.0,0.6) if (i%5==0) else Color(0.35,0.52,0.85,0.22)
-                var co := float(i)*gs
-                im.surface_set_color(c); im.surface_add_vertex(Vector3(co,gy,-half))
-                im.surface_set_color(c); im.surface_add_vertex(Vector3(co,gy, half))
-                im.surface_set_color(c); im.surface_add_vertex(Vector3(-half,gy,co))
-                im.surface_set_color(c); im.surface_add_vertex(Vector3( half,gy,co))
-        # 2.5 rev 7: optional axis wall grids, drawn into the SAME mesh so a
-        # single MeshInstance3D still carries the whole grid visual.
-        if _get_bool("x_grid_enabled"): _append_wall_lines(im, gs, true)
-        if _get_bool("z_grid_enabled"): _append_wall_lines(im, gs, false)
-        im.surface_end()
+        var gs := maxf(_get_float("grid_size"), 0.01)
+        # One shared unshaded vertex-color material for all three grid meshes.
         var mat := StandardMaterial3D.new()
         mat.vertex_color_use_as_albedo = true; mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
         mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED; mat.flags_do_not_receive_shadows = true
+        # 2.5 rev 8 — each plane is its own mesh so it can ride the viewport
+        # camera independently. Lines are generated in LOCAL space around the
+        # origin; _update_grid_follow() positions the nodes every frame, and
+        # because node positions snap to whole Grid Size multiples (the bright
+        # every-5th rhythm to 5x multiples) the lines always land on the same
+        # world coordinates — the grid extends wherever the camera goes instead
+        # of hugging the world center. "View Distance" is the floor's half-extent
+        # in meters (GRID_LINES*gs used to be hardwired at 40).
+        var vd := _get_float("grid_view_dist")
+        if vd <= 0.0: vd = 40.0
+        var nf := clampi(int(vd / gs), 1, 10000)
+        var half := float(nf) * gs
+        var im := ImmediateMesh.new()
+        im.surface_begin(Mesh.PRIMITIVE_LINES)
+        for i in range(-nf, nf + 1):
+                var c := Color(0.55,0.72,1.0,0.6) if (i%5==0) else Color(0.35,0.52,0.85,0.22)
+                var co := float(i)*gs
+                im.surface_set_color(c); im.surface_add_vertex(Vector3(co,0,-half))
+                im.surface_set_color(c); im.surface_add_vertex(Vector3(co,0, half))
+                im.surface_set_color(c); im.surface_add_vertex(Vector3(-half,0,co))
+                im.surface_set_color(c); im.surface_add_vertex(Vector3( half,0,co))
+        im.surface_end()
         im.surface_set_material(0, mat)
-        _grid_mesh = MeshInstance3D.new(); _grid_mesh.name = "__UAP_Grid__"
-        _grid_mesh.mesh = im; _grid_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-        root.add_child(_grid_mesh, true)
+        _grid_mis.append(_make_grid_node(root, im, "__UAP_Grid_Floor__"))
+        if _get_bool("x_grid_enabled"):
+                var xm := _build_wall_mesh(gs, true); xm.surface_set_material(0, mat)
+                _grid_mis.append(_make_grid_node(root, xm, "__UAP_Grid_XWall__"))
+        if _get_bool("z_grid_enabled"):
+                var zm := _build_wall_mesh(gs, false); zm.surface_set_material(0, mat)
+                _grid_mis.append(_make_grid_node(root, zm, "__UAP_Grid_ZWall__"))
+        _update_grid_follow()
+
+func _make_grid_node(root: Node3D, im: ImmediateMesh, node_name: String) -> MeshInstance3D:
+        var mi := MeshInstance3D.new()
+        mi.name = node_name
+        mi.mesh = im; mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+        root.add_child(mi, true)
+        return mi
 
 func _remove_grid() -> void:
-        if is_instance_valid(_grid_mesh):
-                # See _remove_ghost() for why the rename-before-free is needed here.
-                _grid_mesh.name = "del_" + str(randi())
-                _grid_mesh.queue_free(); _grid_mesh = null
+        for mi in _grid_mis:
+                if is_instance_valid(mi):
+                        # See _remove_ghost() for why the rename-before-free is needed here.
+                        (mi as MeshInstance3D).name = "del_" + str(randi())
+                        (mi as MeshInstance3D).queue_free()
+        _grid_mis.clear()
 
-## Appends one axis wall grid's lines to the shared grid ImmediateMesh.
-##   along_x = true  → X-axis grid: the XY plane at z = x_grid_pos (orange,
-##                      the X/red axis family) — snaps X + Y.
-##   along_x = false → Z-axis grid: the ZY plane at x = z_grid_pos (green)
-##                      — snaps Z + Y.
-## Lines sit on WORLD multiples of Grid Size so snapped placements land
-## exactly ON drawn lines; every 5th line is brighter, matching the floor
-## grid's rhythm. "Size" is the half-extent, "cy" the vertical centre.
-func _append_wall_lines(im: ImmediateMesh, gs: float, along_x: bool) -> void:
+## Builds one axis wall grid's lines in LOCAL space (the plane passes through
+## the node origin; _update_grid_follow() positions the node):
+##   along_x = true  → X-axis grid: the XY plane (orange, the X/red axis
+##                     family) — snaps X + Y, node z locked to X Pos Z.
+##   along_x = false → Z-axis grid: the ZY plane (green) — snaps Z + Y,
+##                     node x locked to Z Pos X.
+## Lines sit on LOCAL multiples of Grid Size and the node position snaps to 5x
+## multiples, so lines always land on the same WORLD coordinates as the floor
+## grid and snapped placements land exactly ON drawn lines; every 5th line is
+## brighter, matching the floor grid's rhythm. "View Dist" (size) is the
+## half-extent in meters; Center Y only applies when Follow Camera is off.
+func _build_wall_mesh(gs: float, along_x: bool) -> ImmediateMesh:
         var pref := "x_grid_" if along_x else "z_grid_"
         var size := maxf(_get_float(pref + "size"), 0.5)
-        var pos := _get_float(pref + "pos")
-        var cy := _get_float(pref + "cy")
         var main := Color(1.0, 0.62, 0.18, 0.65) if along_x else Color(0.30, 0.92, 0.50, 0.65)
         var dim := Color(main.r, main.g, main.b, 0.20)
-        var n := int(ceil(size / gs))
-        var y0 := cy - size; var y1 := cy + size
+        var n := clampi(int(size / gs), 1, 10000)
+        var im := ImmediateMesh.new()
+        im.surface_begin(Mesh.PRIMITIVE_LINES)
         for k in range(-n, n + 1):
                 var q := float(k) * gs
                 var c := main if (k % 5 == 0) else dim
                 # Vertical line at horizontal coordinate q (world multiple).
                 if absf(q) <= size + 0.0001:
                         if along_x:
-                                im.surface_set_color(c); im.surface_add_vertex(Vector3(q, y0, pos))
-                                im.surface_set_color(c); im.surface_add_vertex(Vector3(q, y1, pos))
+                                im.surface_set_color(c); im.surface_add_vertex(Vector3(q, -size, 0))
+                                im.surface_set_color(c); im.surface_add_vertex(Vector3(q,  size, 0))
                         else:
-                                im.surface_set_color(c); im.surface_add_vertex(Vector3(pos, y0, q))
-                                im.surface_set_color(c); im.surface_add_vertex(Vector3(pos, y1, q))
+                                im.surface_set_color(c); im.surface_add_vertex(Vector3(0, -size, q))
+                                im.surface_set_color(c); im.surface_add_vertex(Vector3(0,  size, q))
                 # Horizontal line at height q (world multiple).
-                if q >= y0 - 0.0001 and q <= y1 + 0.0001:
+                if q >= -size - 0.0001 and q <= size + 0.0001:
                         if along_x:
-                                im.surface_set_color(c); im.surface_add_vertex(Vector3(-size, q, pos))
-                                im.surface_set_color(c); im.surface_add_vertex(Vector3(size, q, pos))
+                                im.surface_set_color(c); im.surface_add_vertex(Vector3(-size, q, 0))
+                                im.surface_set_color(c); im.surface_add_vertex(Vector3( size, q, 0))
                         else:
-                                im.surface_set_color(c); im.surface_add_vertex(Vector3(pos, q, -size))
-                                im.surface_set_color(c); im.surface_add_vertex(Vector3(pos, q, size))
+                                im.surface_set_color(c); im.surface_add_vertex(Vector3(0, q, -size))
+                                im.surface_set_color(c); im.surface_add_vertex(Vector3(0, q,  size))
+        im.surface_end()
+        return im
+
+## 2.5 rev 8 — infinite-grid follow, called every frame from _process. Moves
+## each grid node so its extent re-centers around the active viewport camera.
+## Positions snap to 5x Grid Size multiples, so the drawn lines never slide
+## with the camera — they stay locked onto the same world coordinates and the
+## grid just extends wherever the camera goes (a small part still covers the
+## world center when the view distance is large enough to reach it).
+## Walls stay locked to their configured plane offset (X Pos Z / Z Pos X)
+## while following in their own two axes; Center Y applies only when Follow
+## Camera is off.
+func _update_grid_follow() -> void:
+        if _grid_mis.is_empty(): return
+        var cam := _grid_follow_camera()
+        if cam == null: return
+        var gs := maxf(_get_float("grid_size"), 0.01)
+        var step := 5.0 * gs
+        var cp := cam.global_position
+        var gy := _get_float("grid_height")
+        var fx := _get_bool("grid_follow")
+        var fxx := _get_bool("x_grid_follow")
+        var fz := _get_bool("z_grid_follow")
+        for mi in _grid_mis:
+                var m := mi as MeshInstance3D
+                if not is_instance_valid(m): continue
+                var nm := String(m.name)
+                var t: Vector3
+                if nm == "__UAP_Grid_Floor__":
+                        t = Vector3(snappedf(cp.x, step), gy, snappedf(cp.z, step)) if fx else Vector3(0.0, gy, 0.0)
+                elif nm == "__UAP_Grid_XWall__":
+                        t = Vector3(snappedf(cp.x, step), snappedf(cp.y, step), _get_float("x_grid_pos")) if fxx else Vector3(0.0, _get_float("x_grid_cy"), _get_float("x_grid_pos"))
+                elif nm == "__UAP_Grid_ZWall__":
+                        t = Vector3(_get_float("z_grid_pos"), snappedf(cp.y, step), snappedf(cp.z, step)) if fz else Vector3(_get_float("z_grid_pos"), _get_float("z_grid_cy"), 0.0)
+                else:
+                        continue
+                if m.position != t: m.position = t
+
+## Camera the grids follow: the last camera that sent the plugin editor input
+## (the viewport the user is actually navigating), falling back to the first
+## editor 3D viewport's camera.
+func _grid_follow_camera() -> Camera3D:
+        if _last_input_camera != null and is_instance_valid(_last_input_camera) and _last_input_camera.is_inside_tree():
+                return _last_input_camera
+        if EditorInterface.has_method("get_editor_viewport_3d"):
+                var vp: Viewport = EditorInterface.get_editor_viewport_3d(0)
+                if vp != null: return vp.get_camera_3d()
+        return null
 
 func _raycast_scene(root: Node, camera: Camera3D, mp: Vector2) -> Dictionary:
         if not root is Node3D or camera == null: return {}

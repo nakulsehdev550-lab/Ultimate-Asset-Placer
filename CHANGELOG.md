@@ -8,6 +8,39 @@ Welcome again, and the panel got quieter and tighter. Verified against a real
 Godot 4.7.1 editor with a 40-step automated harness (assertions + rendered
 screenshots inspected by hand), zero script errors and zero audit fails.
 
+#### Update (2.5.0 rev 8) — infinite camera-following grids + re-add after remove
+- **Camera-following grids.** Every grid plane (blue floor, X wall, Z wall)
+  now re-centers on the viewport camera as you navigate — the grid renders
+  wherever you are instead of staying centred on the world origin. The mesh
+  split into three independent nodes (floor / X wall / Z wall) whose
+  positions update every frame, snapped to whole Grid Size multiples (5x for
+  the bright every-5th rhythm) so the drawn lines never slide: they stay
+  locked onto the same world coordinates and snapped placements still land
+  exactly ON drawn lines.
+- **Adjustable view distance.** New per-plane **View Dist** controls — the
+  floor gets its own slider (was hardwired at 40 m, now 1–2000 m) and the
+  wall Size sliders were renamed to View Dist with the ceiling raised from
+  500 m to 2000 m. Big values + camera following = effectively infinite grid.
+- **Follow Cam toggles.** Floor Follow Cam / X Follow Cam / Z Follow Cam
+  (all ON by default). Turning one off pins that plane to its configured
+  world position — walls return to their Center Y, the floor to the world
+  centre. Wall planes stay locked to their Pos axis even while following;
+  Pos/Centre sliders now reach ±2000 m.
+- **Re-add after remove fixed.** Right-click "Remove from list" hid assets
+  behind a persistent hidden flag that survived every re-add attempt: drag &
+  drop from the FileSystem dock re-registered the file but the browser filter
+  kept the card invisible forever. Any explicit re-add gesture (drag & drop,
+  folder import, extra-path merge) now clears the hidden flag automatically
+  and the status line reports the restore. Restore Hidden remains the bulk
+  reset, and the Format Filter info text documents the whole loop.
+- Harness grown to 80 steps: re-add regression (remove → drop restore, group
+  remove/re-add round-trip, folder-import restore), follow math (camera at
+  non-multiple positions → nodes snap to 5x Grid Size, plane locks honoured,
+  follow-off pins), an A/B far-camera shot pair proving the rendered grid
+  around the camera is UAP's (not the engine's native grid), and the rev-7
+  axis UI leg updated for the renamed rows + new toggles. All pass with zero
+  script errors.
+
 #### Update (2.5.0 rev 7) — axis wall grids (X / Z) + retractable rating stars
 - **Axis wall grids.** Two optional VERTICAL snap grids join the floor grid in
   Grid mode, each toggled on/off individually from the Grid & Snapping group

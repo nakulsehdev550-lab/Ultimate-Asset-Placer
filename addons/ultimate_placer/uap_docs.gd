@@ -131,16 +131,20 @@ By default, placed assets become children of the scene root. You can override th
 [b]Snap to Grid[/b]  — Enables or disables XZ position snapping on the floor grid.
 [b]Grid Size[/b]  — Grid cell size in metres. Range: 0.0625 m to 200 m.
 [b]Grid Y[/b]  — Height of the grid plane. Step buttons nudge it by one grid unit.
+[b]View Dist[/b]  — How far the floor grid reaches from the camera (half-extent in metres, up to 2000). Combined with camera following this makes the grid effectively infinite.
+[b]Floor Follow Cam[/b]  — When ON (default), the floor grid re-centers on the viewport camera as you navigate: fly anywhere and the grid is already there. The lines themselves stay locked onto the same world coordinates (positions move in whole Grid Size multiples), so nothing ever slides under you.
 [b]1m button[/b]  — Instantly resets Grid Size to 1.0 metre.
 
 [color=#46a0f5][b]Axis Wall Grids (X / Z)[/b][/color]
 Two optional VERTICAL grids that snap objects onto wall planes — perfect for windows, wall torches, shelves, signs and anything else that lives on a vertical surface. Each axis grid toggles on/off individually, and when several are enabled the plane closest to the camera under your mouse wins automatically.
 [b]X Axis Grid[/b]  — Wall grid on the XY plane, drawn in ORANGE. Snaps X + Y to Grid Size; Z stays locked to the wall's Pos Z.
-[b]X Size / X Pos Z / X Center Y[/b]  — The wall's half-extent, its depth position along Z, and its vertical centre.
+[b]X Follow Cam[/b]  — When ON (default) the X wall rides the viewport camera in X and Y, so wherever you fly, the wall grid surrounds you. The wall PLANE itself stays at Pos Z. Turn OFF to pin the wall at its Center Y instead.
+[b]X View Dist / X Pos Z / X Center Y[/b]  — The wall's reach from the camera (half-extent in metres, up to 2000), its depth position along Z, and its vertical centre (used when Follow Cam is OFF).
 [b]Z Axis Grid[/b]  — Wall grid on the ZY plane, drawn in GREEN. Snaps Z + Y to Grid Size; X stays locked to the wall's Pos X.
-[b]Z Size / Z Pos X / Z Center Y[/b]  — The same three controls for the Z wall.
+[b]Z Follow Cam[/b]  — Same ride-along behaviour for the Z wall (follows in Z and Y, plane stays at Pos X).
+[b]Z View Dist / Z Pos X / Z Center Y[/b]  — The same three controls for the Z wall.
 
-Wall grids appear in Grid mode together with the blue floor grid (and respect the master Show Grid toggle), and paint-mode scatter spreads stamps ALONG the active wall instead of off it.
+Wall grids appear in Grid mode together with the blue floor grid (and respect the master Show Grid toggle), and paint-mode scatter spreads stamps ALONG the active wall instead of off it. Every grid plane follows the viewport camera by default, so you always have grid right where you are working — turn any plane's Follow Cam off to pin it to a fixed world position instead.
 
 [color=#46a0f5][b]Height Offset[/b][/color]
 Adds a fixed vertical offset to every placed asset. Use positive values to float objects above a surface, negative to push them into it (e.g. flowers sinking into grass).
@@ -159,7 +163,7 @@ Chips for each supported format: [b]GLB, GLTF, FBX, OBJ, DAE, BLEND, TSCN, SCN, 
 
 [b]All On[/b]  — Enables every format.
 [b]All Off[/b]  — Disables every format (useful to quickly clear before enabling only what you need).
-[b]Restore Hidden[/b]  — Brings back every asset that was removed from the browser list via the right-click menu.
+[b]Restore Hidden[/b]  — Brings back every asset that was removed from the browser list via the right-click menu. You can also bring removed assets back one at a time: dragging them in from the FileSystem dock or importing their folder automatically restores them.
 
 [color=#46a0f5][b]Asset Zoo[/b][/color]
 Places every loaded asset in a neat grid inside an [b]AssetZoo[/b] node — a visual 3D catalogue you can walk around.

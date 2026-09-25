@@ -9,7 +9,8 @@
 ## Highlights
 
 - **Four placement modes** — Free, Grid, Surface (physics raycast), and Vertex (mesh magnet snap).
-- **Axis wall grids** — optional X/Z vertical snap planes (orange XY wall / green ZY wall), each with its own size, position and on/off toggle; objects snap onto whichever enabled plane is under the mouse.
+- **Infinite camera-following grids** — the floor and the optional X/Z wall grids ride the viewport camera (lines stay locked onto world coordinates), each with an adjustable view distance up to 2000 m; grid is always right where you are.
+- **Axis wall grids** — optional X/Z vertical snap planes (orange XY wall / green ZY wall), each with its own view distance, position and on/off toggle; objects snap onto whichever enabled plane is under the mouse.
 - **Paint & volumetric brush** — drag-paint, circular brush with density/falloff, and mask textures.
 - **MultiMesh painting** — thousands of instances in a single draw call.
 - **Advanced spline system** — scatter props along curves or deform meshes into roads/rivers; terrain snapping; bake to nodes or MultiMesh.
@@ -20,6 +21,30 @@
 - **Asset Zoo** — lays out your whole library in a 3D grid for inspection.
 
 ## What's new in v2.5.0 — the star, fixed for real; quieter, tighter panel
+
+### Update (rev 8) — infinite camera-following grids + re-add after remove
+
+**The grids follow you now.** Every grid plane — the blue floor and both
+optional walls — re-centers on the viewport camera as you navigate, so the
+grid renders wherever you are instead of hugging the world center. The lines
+themselves never slide: node positions move in whole Grid Size multiples (the
+bright every-5th rhythm in 5x multiples), so every line stays locked onto the
+same world coordinates and snapped placements still land exactly ON drawn
+lines. Each plane's **View Dist** slider (up to 2000 m) sets how far it
+reaches from the camera — crank it up for an effectively infinite grid. Don't
+want a plane to travel? Turn off its **Follow Cam** toggle and it pins to its
+configured world position again (Center Y back in charge for walls; wall
+planes always stay locked to their Pos axis).
+
+**Re-add fix.** Removing an asset via right-click "Remove from list" used to
+make it impossible to add back: dragging it from the FileSystem dock or
+importing its folder re-registered the file, but a leftover hidden flag kept
+the card invisible forever (only the all-or-nothing Restore Hidden button
+recovered it). Dragging a removed asset back in — or importing its folder —
+now automatically restores it, so anything you remove can always be added
+back whenever you want. Restore Hidden still works as the bulk reset.
+
+![Axis wall grids following the camera](screenshots/axis_grids.png)
 
 ### Update (rev 7) — axis wall grids (X / Z) + retractable rating stars
 

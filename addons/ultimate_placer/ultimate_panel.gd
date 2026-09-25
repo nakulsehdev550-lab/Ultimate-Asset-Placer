@@ -194,15 +194,22 @@ var place_mode:int=1; var scroll_mode:int=0
 var grid_enabled:bool=true; var grid_size:float=1.0
 var grid_height:float=0.0; var height_offset:float=0.0
 var height_snap:bool=false; var show_grid:bool=true
+# 2.5 rev 8 — infinite-grid follow: the floor's half-extent is configurable
+# ("View Dist", used to be hardwired at 40 m) and every plane can re-center
+# on the viewport camera as you navigate (lines stay locked onto world grid
+# multiples, so the grid never slides — it just extends wherever you go).
+var grid_view_dist:float=40.0
+var grid_follow:bool=true
 # 2.5 rev 7 — axis wall grids: vertical snap planes toggled individually.
 #   X grid = XY plane at z = x_grid_pos (snaps X + Y, orange lines)
 #   Z grid = ZY plane at x = z_grid_pos (snaps Z + Y, green lines)
-# Size = half-extent in metres, pos = offset along the perpendicular axis,
-# cy = vertical centre of the wall.
+# Size (View Dist) = half-extent in metres, pos = offset along the
+# perpendicular axis, cy = vertical centre of the wall (follow-off only).
 var x_grid_enabled:bool=false; var x_grid_size:float=10.0
 var x_grid_pos:float=0.0; var x_grid_cy:float=0.0
 var z_grid_enabled:bool=false; var z_grid_size:float=10.0
 var z_grid_pos:float=0.0; var z_grid_cy:float=0.0
+var x_grid_follow:bool=true; var z_grid_follow:bool=true
 var align_to_normal:bool=false; var vertex_snap_mesh:bool=false
 var vertex_snap_strength:float=42.0
 var rotation_snap_mode:int=1; var custom_snap_deg:float=15.0
@@ -1526,30 +1533,42 @@ func _build_place_tab()->void:
         _grid_h_spin.value_changed.connect(_on_grid_h_changed); ghr.add_child(_grid_h_spin)
         var ld:=Button.new(); UAPIcons.set_button_icon(ld, "action_chevron_down"); ld.tooltip_text="Lower grid height"; ld.pressed.connect(func(): nudge_grid_height(-grid_size)); ghr.add_child(ld)
         var lu:=Button.new(); UAPIcons.set_button_icon(lu, "action_chevron_up"); lu.tooltip_text="Raise grid height"; lu.pressed.connect(func(): nudge_grid_height(grid_size)); ghr.add_child(lu)
+        var gvr:=_row("View Dist",g); var gvs:=_ss(1.0,2000.0,grid_view_dist,1.0)
+        gvs.value_changed.connect(_on_grid_vd_changed); gvr.add_child(gvs)
+        var gvu:=Label.new(); gvu.text="m"; gvu.add_theme_color_override("font_color",C_DIM); gvr.add_child(gvu)
+        gvs.tooltip_text="Half-extent of the floor grid in metres. The grid re-centers on the viewport camera as you navigate, so a big view distance means visible grid everywhere you go."
+        _row_chk("Floor Follow Cam",g,grid_follow,_on_grid_follow_changed,
+                "When ON the floor grid rides the viewport camera — as you move, the grid re-renders around you (lines stay locked onto world grid multiples, so nothing slides). Turn OFF to pin it to the world center.")
         # 2.5 rev 7 — axis wall grids, living in the grid group as requested.
         # Each one toggles on/off individually: ON draws the wall grid in the
         # viewport (Grid mode, respects the master Show Grid toggle) and lets
         # objects snap onto that plane. With several enabled, the plane closest
         # to the camera under the mouse wins.
-        _info(g,"Axis wall grids snap objects onto vertical planes — X grid = XY plane (orange), Z grid = ZY plane (green). With several on, the plane closest to the camera wins.")
+        _info(g,"Axis wall grids snap objects onto vertical planes — X grid = XY plane (orange), Z grid = ZY plane (green). With several on, the plane closest to the camera wins. Every plane follows the viewport camera and can be made huge via its View Dist slider.")
         _row_chk("X Axis Grid",g,x_grid_enabled,_on_x_grid_changed,"Wall grid on the XY plane — snaps X + Y, locks Z to Pos Z")
-        var xsr:=_row("X Size",g); var xss:=_ss(0.5,500.0,x_grid_size,0.5)
+        _row_chk("X Follow Cam",g,x_grid_follow,_on_x_grid_follow_changed,
+                "When ON the X wall rides the viewport camera in X and Y (the wall plane itself stays at Pos Z). Turn OFF to pin it at Center Y.")
+        var xsr:=_row("X View Dist",g); var xss:=_ss(0.5,2000.0,x_grid_size,0.5)
         xss.value_changed.connect(_on_x_grid_size_changed); xsr.add_child(xss)
         var xsu:=Label.new(); xsu.text="m"; xsu.add_theme_color_override("font_color",C_DIM); xsr.add_child(xsu)
-        var xpr:=_row("X Pos Z",g); var xps:=_ss(-500.0,500.0,x_grid_pos,0.5)
+        xss.tooltip_text="Half-extent of the X wall grid in metres (how far it reaches from the camera)."
+        var xpr:=_row("X Pos Z",g); var xps:=_ss(-2000.0,2000.0,x_grid_pos,0.5)
         xps.value_changed.connect(_on_x_grid_pos_changed); xpr.add_child(xps)
         var xpu:=Label.new(); xpu.text="m"; xpu.add_theme_color_override("font_color",C_DIM); xpr.add_child(xpu)
-        var xcr:=_row("X Center Y",g); var xcs:=_ss(-500.0,500.0,x_grid_cy,0.5)
+        var xcr:=_row("X Center Y",g); var xcs:=_ss(-2000.0,2000.0,x_grid_cy,0.5)
         xcs.value_changed.connect(_on_x_grid_cy_changed); xcr.add_child(xcs)
         var xcu:=Label.new(); xcu.text="m"; xcu.add_theme_color_override("font_color",C_DIM); xcr.add_child(xcu)
         _row_chk("Z Axis Grid",g,z_grid_enabled,_on_z_grid_changed,"Wall grid on the ZY plane — snaps Z + Y, locks X to Pos X")
-        var zsr:=_row("Z Size",g); var zss:=_ss(0.5,500.0,z_grid_size,0.5)
+        _row_chk("Z Follow Cam",g,z_grid_follow,_on_z_grid_follow_changed,
+                "When ON the Z wall rides the viewport camera in Z and Y (the wall plane itself stays at Pos X). Turn OFF to pin it at Center Y.")
+        var zsr:=_row("Z View Dist",g); var zss:=_ss(0.5,2000.0,z_grid_size,0.5)
         zss.value_changed.connect(_on_z_grid_size_changed); zsr.add_child(zss)
         var zsu:=Label.new(); zsu.text="m"; zsu.add_theme_color_override("font_color",C_DIM); zsr.add_child(zsu)
-        var zpr:=_row("Z Pos X",g); var zps:=_ss(-500.0,500.0,z_grid_pos,0.5)
+        zss.tooltip_text="Half-extent of the Z wall grid in metres (how far it reaches from the camera)."
+        var zpr:=_row("Z Pos X",g); var zps:=_ss(-2000.0,2000.0,z_grid_pos,0.5)
         zps.value_changed.connect(_on_z_grid_pos_changed); zpr.add_child(zps)
         var zpu:=Label.new(); zpu.text="m"; zpu.add_theme_color_override("font_color",C_DIM); zpr.add_child(zpu)
-        var zcr:=_row("Z Center Y",g); var zcs:=_ss(-500.0,500.0,z_grid_cy,0.5)
+        var zcr:=_row("Z Center Y",g); var zcs:=_ss(-2000.0,2000.0,z_grid_cy,0.5)
         zcs.value_changed.connect(_on_z_grid_cy_changed); zcr.add_child(zcs)
         var zcu:=Label.new(); zcu.text="m"; zcu.add_theme_color_override("font_color",C_DIM); zcr.add_child(zcu)
         var h:=_section(vb,"Height Offset")
@@ -1562,7 +1581,7 @@ func _build_place_tab()->void:
         var vssr:=_row("Magnet px",sv); _vss_spin=_ss(5.0,300.0,vertex_snap_strength,1.0)
         _vss_spin.value_changed.connect(func(v:float): vertex_snap_strength=v;_save_config()); vssr.add_child(_vss_spin)
         var ff:=_section(vb,"Format Filter",false)
-        _info(ff,"Choose which 3D formats to scan. Right-click any asset card to remove it from the browser list; restore removed assets with the button below.")
+        _info(ff,"Choose which 3D formats to scan. Right-click any asset card to remove it from the browser list; bring removed assets back anytime — drag them in from the FileSystem dock, import their folder, or use the Restore Hidden button below.")
         var fmt_flow:=FlowContainer.new(); fmt_flow.size_flags_horizontal=SIZE_EXPAND_FILL
         fmt_flow.add_theme_constant_override("h_separation",3); fmt_flow.add_theme_constant_override("v_separation",3); ff.add_child(fmt_flow)
         _format_btns.clear()
@@ -2128,6 +2147,7 @@ func _on_import_folder_to_group(opt:OptionButton)->void:
 func _do_import_folder_to_group(dir:String,group_idx:int)->void:
         var new_paths:Array=[]; _collect_files(dir,new_paths)
         if new_paths.is_empty(): set_status("No supported assets found in that folder.",C_WARN); return
+        var restored:=_unhide_paths(new_paths)
         var added:=0
         if group_idx==0:
                 for p in new_paths:
@@ -2139,9 +2159,10 @@ func _do_import_folder_to_group(dir:String,group_idx:int)->void:
         var ba:=0
         for p in new_paths:
                 if not _all_paths.has(p): _all_paths.append(p); ba+=1
-        if ba>0: _rebuild_browser_now()
+        if ba>0 or restored>0: _rebuild_browser_now()
         _rebuild_group_list(); _rebuild_group_bar(); _save_config()
-        set_status("Imported %d assets into group."%added,C_OK)
+        if restored>0: set_status("Imported %d assets into group (%d restored from the removed list)."%[added,restored],C_OK)
+        else: set_status("Imported %d assets into group."%added,C_OK)
 
 func _build_keys_tab()->void:
         var vb:=_make_tab("Keys", "tab_keys")
@@ -2492,6 +2513,10 @@ func _on_z_grid_changed(v:bool)->void: z_grid_enabled=v; if is_instance_valid(pl
 func _on_z_grid_size_changed(v:float)->void: z_grid_size=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
 func _on_z_grid_pos_changed(v:float)->void: z_grid_pos=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
 func _on_z_grid_cy_changed(v:float)->void: z_grid_cy=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_grid_vd_changed(v:float)->void: grid_view_dist=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_grid_follow_changed(v:bool)->void: grid_follow=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_x_grid_follow_changed(v:bool)->void: x_grid_follow=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
+func _on_z_grid_follow_changed(v:bool)->void: z_grid_follow=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
 func _on_height_changed(v:float)->void: height_offset=v; _save_config()
 func _on_height_snap_changed(v:bool)->void: height_snap=v; _save_config()
 func _on_align_normal_changed(v:bool)->void: align_to_normal=v; _save_config(); if is_instance_valid(placer):placer.call("refresh_ghosts")
@@ -2586,7 +2611,20 @@ func _on_clear_browser()->void:
         if is_instance_valid(_search_edit): _search_edit.text=""
         _rebuild_browser(""); set_status("Browser cleared.",C_DIM); _save_config()
 
+func _unhide_paths(paths:Array)->int:
+        ## 2.5 rev 8 bugfix — assets removed via right-click "Remove from list"
+        ## live in _hidden_paths, which is filtered out of EVERY browser view and
+        ## every rescan. Any explicit re-add gesture (drag & drop from the
+        ## FileSystem dock, folder import, extra-path merge) must also lift that
+        ## flag, otherwise the asset would silently stay invisible forever no
+        ## matter how often the user re-added it. Returns how many were restored.
+        var n:=0
+        for p in paths:
+                if _hidden_paths.has(p): _hidden_paths.erase(p); n+=1
+        return n
+
 func _merge_extra_paths(extras:Array)->void:
+        _unhide_paths(extras)
         for p in extras:
                 if ResourceLoader.exists(p) and not _all_paths.has(p): _all_paths.append(p)
         if not extras.is_empty(): _rebuild_browser_now()
@@ -2625,6 +2663,10 @@ func _drop_asset_files(_at:Vector2,data:Variant)->void:
                 group_paths.append(fs)
                 if not _all_paths.has(fs):
                         _all_paths.append(fs); globally_added+=1
+        # 2.5 rev 8 bugfix — dropping an asset back in is an explicit "I want this
+        # back" gesture: lift the right-click "Remove from list" hidden flag so
+        # the rebuilt browser actually shows the card again.
+        var restored:=_unhide_paths(group_paths)
 
         # Add to active group — this runs even for files already in _all_paths.
         if _active_group==-2:
@@ -2636,18 +2678,20 @@ func _drop_asset_files(_at:Vector2,data:Variant)->void:
                         if not gd["paths"].has(p): gd["paths"].append(p); group_added+=1
 
         var total:=maxi(globally_added, group_added)
-        if total>0 or group_added>0:
+        if total>0 or group_added>0 or restored>0:
                 var filter:=_search_edit.text if is_instance_valid(_search_edit) else ""
                 _rebuild_browser(filter); _rebuild_group_list(); _rebuild_group_bar()
                 _save_config()
+                var suffix:="" if restored==0 else " (%d restored)"%restored
                 if group_added>0 and globally_added==0:
-                        set_status("Added %d asset(s) to group." % group_added, C_OK)
+                        set_status("Added %d asset(s) to group."%group_added+suffix, C_OK)
                 elif group_added>0:
-                        set_status("Added %d asset(s) to browser and group." % group_added, C_OK)
+                        set_status("Added %d asset(s) to browser and group."%group_added+suffix, C_OK)
                 else:
-                        set_status("Added %d asset(s) to browser." % globally_added, C_OK)
+                        set_status("Added %d asset(s) to browser."%globally_added+suffix, C_OK)
         elif not group_paths.is_empty():
-                set_status("Asset(s) already in the current group.",C_DIM)
+                if restored>0: set_status("Restored %d asset(s) that were removed from the list."%restored,C_OK)
+                else: set_status("Asset(s) already in the current group.",C_DIM)
 
 func _prev_page()->void:
         if current_page>0: current_page-=1; _rebuild_browser_now()
@@ -3729,6 +3773,8 @@ func _save_config()->void:
         cfg.set_value("s","show_grid",show_grid); cfg.set_value("s","grid_enabled",grid_enabled)
         cfg.set_value("s","x_grid_enabled",x_grid_enabled); cfg.set_value("s","x_grid_size",x_grid_size)
         cfg.set_value("s","x_grid_pos",x_grid_pos); cfg.set_value("s","x_grid_cy",x_grid_cy)
+        cfg.set_value("s","grid_view_dist",grid_view_dist); cfg.set_value("s","grid_follow",grid_follow)
+        cfg.set_value("s","x_grid_follow",x_grid_follow); cfg.set_value("s","z_grid_follow",z_grid_follow)
         cfg.set_value("s","z_grid_enabled",z_grid_enabled); cfg.set_value("s","z_grid_size",z_grid_size)
         cfg.set_value("s","z_grid_pos",z_grid_pos); cfg.set_value("s","z_grid_cy",z_grid_cy)
         cfg.set_value("s","align_to_normal",align_to_normal); cfg.set_value("s","vertex_snap_mesh",vertex_snap_mesh)
@@ -3801,6 +3847,10 @@ func _load_config()->void:
         z_grid_size           =cfg.get_value("s","z_grid_size",10.0)
         z_grid_pos            =cfg.get_value("s","z_grid_pos",0.0)
         z_grid_cy             =cfg.get_value("s","z_grid_cy",0.0)
+        grid_view_dist        =cfg.get_value("s","grid_view_dist",40.0)
+        grid_follow           =cfg.get_value("s","grid_follow",true)
+        x_grid_follow         =cfg.get_value("s","x_grid_follow",true)
+        z_grid_follow         =cfg.get_value("s","z_grid_follow",true)
         align_to_normal       =cfg.get_value("s","align_to_normal",false)
         vertex_snap_mesh      =cfg.get_value("s","vertex_snap_mesh",false)
         vertex_snap_strength  =cfg.get_value("s","vertex_snap_strength",42.0)
