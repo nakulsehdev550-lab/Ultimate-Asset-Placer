@@ -46,6 +46,26 @@ back whenever you want. Restore Hidden still works as the bulk reset.
 
 ![Axis wall grids following the camera](screenshots/axis_grids.png)
 
+### Update (rev 8.1) — refresh always reloads your files + Show Hidden
+
+**Refresh is disk truth now.** Removing an asset no longer erases it from
+the folder scan: Refresh (and every other rescan — folder change, format
+toggle) always lists every matching file under the selected path again, even
+ones you removed earlier. Removed assets simply stay out of the view until
+you bring them back — hidden stays hidden across refreshes and editor
+restarts, exactly as you'd expect.
+
+**Show Hidden, right in the browser.** A new toggle next to Refresh reveals
+every removed asset as a dimmed card with a small "Hidden" tag on its
+thumbnail. Right-click a dimmed card → **Restore to Asset List** brings it
+back for good (the context menu switches to Restore automatically on hidden
+cards); dragging files back in from the FileSystem dock, importing their
+folder, and the bulk Restore Hidden button (Place tab → Format Filter) all
+keep working too. The status line always reports how many assets are hidden
+and points at the toggle — an emptied browser can never dead-end again.
+
+![Show Hidden reveals removed assets, dimmed with tags](screenshots/show_hidden.png)
+
 ### Update (rev 7) — axis wall grids (X / Z) + retractable rating stars
 
 **Vertical snap grids are here.** Grid mode now supports two optional wall

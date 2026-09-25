@@ -41,6 +41,36 @@ screenshots inspected by hand), zero script errors and zero audit fails.
   axis UI leg updated for the renamed rows + new toggles. All pass with zero
   script errors.
 
+#### Update (2.5.0 rev 8.1) — refresh reloads from disk + Show Hidden in the browser
+- **The "removed everything, refresh does nothing" bug, fixed for real.** The
+  rev-8 re-add fix covered explicit re-add gestures, but the deep root cause
+  remained: removing an asset both flagged it hidden AND erased it from the
+  master asset list, while the folder scan refused to re-list hidden paths —
+  so after removing every asset, Refresh rebuilt an empty browser forever and
+  even the bulk "Restore Hidden" was the only way out. The master list is
+  now DISK TRUTH: every rescan (Refresh, folder change, format toggle)
+  always lists every matching file under the selected path again, and
+  removing only toggles a per-asset view flag.
+- **Hidden stays hidden.** Removed assets remain out of the view across
+  refreshes and editor restarts — exactly as before — but they are never
+  lost: they live in the persisted hidden list, still on disk.
+- **New "Show Hidden" browser toggle** (right of Refresh). ON: every removed
+  asset reappears in the current view as a dimmed card with a small "Hidden"
+  tag on its thumbnail; right-click a dimmed card → **Restore to Asset
+  List** brings it back for good (the context menu switches to Restore
+  automatically on hidden cards). OFF: back to the normal view. Session-only
+  view state — a refresh/reopen always starts with them hidden again.
+- **Guided status line.** Whenever hidden assets exist, scan/build status
+  reads "Loaded N assets (M hidden — click Show Hidden to reveal them)" so
+  an emptied browser always shows the way out. Drag-back, folder import and
+  the bulk Restore Hidden button keep working as restore paths (rev 8).
+- Harness grown to 81 steps: new end-to-end hidden-refresh regression
+  (remove-all → refresh reloads disk with view still filtered → Show Hidden
+  reveals all dimmed+tagged → right-click restore of one asset → toggle off
+  shows only it → bulk Restore Hidden empties the hidden list), and the
+  re-add regression updated for the disk-truth semantics. All pass with zero
+  script errors.
+
 #### Update (2.5.0 rev 7) — axis wall grids (X / Z) + retractable rating stars
 - **Axis wall grids.** Two optional VERTICAL snap grids join the floor grid in
   Grid mode, each toggled on/off individually from the Grid & Snapping group

@@ -267,6 +267,7 @@ var _multi_selected:Array=[]; var _last_clicked_path:String=""
 var _selected_path_ui:String=""; var _card_map:Dictionary={}
 var _browser_generation:int=0  # Increments on each rebuild; prevents stale thumbnail callbacks
 var _hidden_paths:Array=[]  ## Assets removed from the browser list via right-click. Persisted; reversible.
+var _show_hidden:bool=false  ## 2.5 rev 8.1 — session-only browser "Show Hidden" toggle. ON → removed (hidden) assets reappear in EVERY view as dimmed cards. Never persisted: a refresh/reopen always starts with them hidden again.
 
 # ─── UI Overhaul 2.1: Left tab rail + Docs window + 3D tactile styles ────────
 var _tab_rail:VBoxContainer=null          # Blender-style vertical icon bar
@@ -502,7 +503,7 @@ func _tick_build_queue()->void:
         if not _build_queue.is_empty():
                 set_status("Building browser... %d / %d" % [_visible_paths_ordered.size()-_build_queue.size(), _visible_paths_ordered.size()], C_DIM)
         else:
-                set_status("Loaded %d assets — click any to start placing" % _visible_paths_ordered.size(), C_OK)
+                _status_loaded_msg()
 
 func _tick_scan()->void:
         var count:=0
@@ -522,14 +523,37 @@ func _scan_one_dir(folder:String)->void:
                         if da.current_is_dir():
                                 if fn not in SKIP_DIRS: _scan_dir_queue.append(full)
                         elif fn.get_extension().to_lower() in import_formats:
-                                if not _hidden_paths.has(full): _all_paths.append(full)
+                                # 2.5 rev 8.1 — DISK TRUTH: a refresh must ALWAYS
+                                # list every matching file under the selected
+                                # folder, even one the user removed earlier.
+                                # _hidden_paths is a VIEW flag now, not a scan
+                                # filter: _filtered_paths() keeps removed assets
+                                # out of the normal view and the browser's
+                                # "Show Hidden" toggle reveals them dimmed.
+                                # (The old guard skipped hidden paths here, so
+                                # after removing every asset a refresh could
+                                # never bring the list back — the reported bug.)
+                                _all_paths.append(full)
                 fn=da.get_next()
         da.list_dir_end()
+
+func _status_loaded_msg()->void:
+        ## 2.5 rev 8.1 — one shared "scan/build finished" status line. When
+        ## hidden (removed) assets exist it tells the user HOW MANY and points
+        ## at the Show Hidden toggle, so "I removed everything and now the
+        ## browser is empty" always comes with a visible way out.
+        var hid:=0
+        for p in _all_paths:
+                if _hidden_paths.has(p): hid+=1
+        if hid>0:
+                set_status("Loaded %d assets (%d hidden — click Show Hidden to reveal them)"%[_all_paths.size()-hid,hid],C_OK)
+        else:
+                set_status("Loaded %d assets — click any to start placing"%_all_paths.size(),C_OK)
 
 func _on_scan_finished()->void:
         var filter:=_search_edit.text if is_instance_valid(_search_edit) else ""
         _rebuild_browser(filter)
-        set_status("Loaded %d assets — click any to start placing"%_all_paths.size(),C_OK)
+        _status_loaded_msg()
 
 func _can_preview_path(path:String)->bool: return path.get_extension().to_lower() in ALL_PREVIEW_EXTS
 
@@ -1181,6 +1205,20 @@ func _build_header(root:VBoxContainer)->void:
         var rfr:=Button.new(); rfr.text="Refresh"; rfr.tooltip_text="Refresh folder scan"
         UAPIcons.set_button_icon(rfr, "action_refresh")
         rfr.pressed.connect(_scan_folder); fr.add_child(rfr)
+        # 2.5 rev 8.1 — Show Hidden: reveals assets removed from the list
+        # (right-click → Remove from Asset List) as dimmed, "Hidden"-tagged
+        # cards so they can be restored right here in the browser. Session-
+        # only view state: a refresh/reopen always starts with them hidden
+        # again ("hidden stays hidden"), and only an explicit restore gesture
+        # (right-click → Restore to Asset List, drag back, folder import, or
+        # the bulk Restore Hidden button) lifts the flag for good.
+        var shb:=Button.new(); shb.text="Show Hidden"; shb.toggle_mode=true
+        shb.tooltip_text="Reveal assets removed from the list (shown dimmed).\nRight-click a dimmed card → Restore to Asset List.\nToggle off to hide them again."
+        shb.set_pressed_no_signal(_show_hidden)
+        shb.toggled.connect(_on_show_hidden_toggled)
+        shb.add_theme_color_override("font_pressed_color",Color(0.78,0.88,1.0))
+        shb.add_theme_color_override("font_hover_pressed_color",Color(0.88,0.93,1.0))
+        fr.add_child(shb)
         var sr:=HBoxContainer.new(); sr.add_theme_constant_override("separation",3)
         sr.size_flags_horizontal=SIZE_EXPAND_FILL; sr.clip_contents=true; _search_panel.add_child(sr)
         _search_edit=LineEdit.new(); _search_edit.placeholder_text="Search assets..."
@@ -1193,7 +1231,7 @@ func _build_header(root:VBoxContainer)->void:
         _preview_lbl.custom_minimum_size=Vector2.ZERO; sr.add_child(_preview_lbl)
         var clrb:=Button.new(); clrb.text="Clear"
         clrb.size_flags_horizontal=SIZE_SHRINK_END; clrb.pressed.connect(_on_clear_browser); sr.add_child(clrb)
-        for b:Button in [brw,rfr,clrb]: _style_idle_button(b)
+        for b:Button in [brw,rfr,shb,clrb]: _style_idle_button(b)
         _group_bar=FlowContainer.new(); _group_bar.size_flags_horizontal=SIZE_EXPAND_FILL
         _group_bar.clip_contents=true; _group_bar.add_theme_constant_override("h_separation",2)
         _group_bar.add_theme_constant_override("v_separation",2); _search_panel.add_child(_group_bar)
@@ -1581,7 +1619,7 @@ func _build_place_tab()->void:
         var vssr:=_row("Magnet px",sv); _vss_spin=_ss(5.0,300.0,vertex_snap_strength,1.0)
         _vss_spin.value_changed.connect(func(v:float): vertex_snap_strength=v;_save_config()); vssr.add_child(_vss_spin)
         var ff:=_section(vb,"Format Filter",false)
-        _info(ff,"Choose which 3D formats to scan. Right-click any asset card to remove it from the browser list; bring removed assets back anytime — drag them in from the FileSystem dock, import their folder, or use the Restore Hidden button below.")
+        _info(ff,"Choose which 3D formats to scan. Right-click any asset card to remove it from the browser list; removed assets come back anytime — click Show Hidden in the browser (right-click a dimmed card → Restore to Asset List), drag them in from the FileSystem dock, or use the Restore Hidden button below.")
         var fmt_flow:=FlowContainer.new(); fmt_flow.size_flags_horizontal=SIZE_EXPAND_FILL
         fmt_flow.add_theme_constant_override("h_separation",3); fmt_flow.add_theme_constant_override("v_separation",3); ff.add_child(fmt_flow)
         _format_btns.clear()
@@ -2601,6 +2639,27 @@ func _scan_folder()->void:
         _thumb_retry_queue.clear(); _thumb_perm_failed.clear(); _thumb_heavy_count=0
         _scan_dir_queue=[current_folder]; _is_scanning=true; set_status("Scanning...",C_DIM)
 
+func _on_show_hidden_toggled(on:bool)->void:
+        ## 2.5 rev 8.1 — browser-level "Show Hidden" toggle. ON: assets removed
+        ## via right-click reappear (dimmed, "Hidden"-tagged) in EVERY view so
+        ## they can be restored in place. OFF: back to the normal view. Pure
+        ## view state — the hidden flag itself is untouched here; only an
+        ## explicit restore (right-click → Restore to Asset List, drag back,
+        ## folder import, Restore Hidden) lifts it.
+        _show_hidden=on
+        current_page=0
+        _rebuild_browser_now()
+        if on:
+                var n:=0
+                for p in _all_paths:
+                        if _hidden_paths.has(p): n+=1
+                if n>0:
+                        set_status("Showing %d hidden asset(s) — dimmed. Right-click one → Restore to Asset List."%n,C_OK)
+                else:
+                        set_status("No hidden assets — nothing to reveal.",C_DIM)
+        else:
+                set_status("Hidden assets are out of view again (files untouched).",C_DIM)
+
 func _on_clear_browser()->void:
         if is_instance_valid(placer):placer.call("cancel_placement")
         _is_scanning=false; _scan_dir_queue.clear()
@@ -2739,8 +2798,11 @@ func _filtered_paths(filter:String)->Array:
         # instead of requiring them to be re-added.
         base=base.filter(func(p): return (p as String).get_extension().to_lower() in import_formats)
         # Assets removed via the card context menu stay out of every view
-        # (including group views) until explicitly restored.
-        base=base.filter(func(p): return not _hidden_paths.has(p))
+        # (including group views) until explicitly restored — UNLESS the
+        # browser's "Show Hidden" toggle is ON, which reveals them dimmed so
+        # they can be restored in place (2.5 rev 8.1).
+        if not _show_hidden:
+                base=base.filter(func(p): return not _hidden_paths.has(p))
         if filter.strip_edges().is_empty(): return base
         var lf:=filter.to_lower(); var result:Array=[]
         for p in base:
@@ -2903,6 +2965,35 @@ func _add_card(path:String)->void:
                         # thumbnail (confirmed by probe + harness).
                         chip.add_theme_stylebox_override("normal",StyleBoxEmpty.new())
                         ir.add_child(chip)
+        # 2.5 rev 8.1 — removed-asset ghosting: while the browser's "Show
+        # Hidden" toggle is ON, cards removed from the list reappear DIMMED
+        # with a small "Hidden" tag on the thumbnail's top-left (the favorite
+        # star owns the top-right, "Opened" owns the bottom-left), so they
+        # read as "not really in the list". Everything stays interactive —
+        # click/right-click still work so the asset can be restored in place.
+        if _hidden_paths.has(path):
+                card.modulate=Color(1,1,1,0.42)
+                var hchip:=Label.new(); hchip.text="Hidden"
+                hchip.mouse_filter=Control.MOUSE_FILTER_IGNORE
+                var hchip_h:=maxi(11,int(13*_es))
+                hchip.anchor_left=0.0; hchip.anchor_right=0.0
+                hchip.anchor_top=0.0;  hchip.anchor_bottom=0.0
+                hchip.offset_left=int(3*_es)
+                hchip.offset_right=hchip.offset_left+maxi(38,int(44*_es))
+                hchip.offset_top=int(2*_es)
+                hchip.offset_bottom=hchip.offset_top+hchip_h
+                hchip.horizontal_alignment=HORIZONTAL_ALIGNMENT_LEFT
+                hchip.vertical_alignment=VERTICAL_ALIGNMENT_CENTER
+                hchip.add_theme_font_size_override("font_size",maxi(8,int(9*_es)))
+                hchip.add_theme_color_override("font_color",Color(0.72,0.76,0.85))
+                hchip.add_theme_color_override("font_outline_color",Color(0,0,0,1))
+                hchip.add_theme_constant_override("outline_size",maxi(2,int(2*_es)))
+                # Zero-margin stylebox: same ambient-theme guard as the
+                # "Opened" chip above — without it the theme inflates the
+                # label's minimum size past the 13px chip rect.
+                hchip.add_theme_stylebox_override("normal",StyleBoxEmpty.new())
+                ir.add_child(hchip)
+                card.tooltip_text=str(card.tooltip_text)+"\nHIDDEN — removed from the list. Right-click → Restore to Asset List."
         if _multi_selected.has(path):
                 _card_apply_state(card,2)
         wrapper.add_child(card)
@@ -3037,12 +3128,23 @@ func _open_card_context_menu(path:String)->void:
         menu.add_submenu_node_item("Add to Group", group_menu, 1)
         menu.set_item_icon(menu.get_item_index(1), UAPIcons.get_icon("tab_groups"))
         menu.add_separator()
+        # 2.5 rev 8.1 — dual-purpose last item: on a visible card it removes
+        # (hides) the asset; on a HIDDEN card (only reachable while the
+        # browser's "Show Hidden" toggle is ON) it restores the asset to the
+        # list. Same handler id, label chosen by the targets' hidden state.
+        var all_hidden:bool=true
+        for p in targets:
+                if not _hidden_paths.has(p): all_hidden=false; break
         var rm_idx := menu.get_item_count()
-        menu.add_icon_item(UAPIcons.get_icon("action_delete"), "Remove from Asset List", 2)
-        menu.set_item_tooltip(rm_idx,"Hide %s from the browser list.\nFiles are NOT deleted. Restore via Place tab → Format Filter → Restore Hidden."%noun)
-        # NOTE: PopupMenu has no per-item FONT color API in Godot 4.7 — tint the
-        # icon red instead, which keeps the destructive action visually distinct.
-        menu.set_item_icon_modulate(rm_idx,C_ERROR)
+        if all_hidden:
+                menu.add_icon_item(UAPIcons.get_icon("action_refresh"), "Restore to Asset List", 2)
+                menu.set_item_tooltip(rm_idx,"Put %s back on the browser list.\nThe file was never deleted."%noun)
+        else:
+                menu.add_icon_item(UAPIcons.get_icon("action_delete"), "Remove from Asset List", 2)
+                menu.set_item_tooltip(rm_idx,"Hide %s from the browser list.\nFiles are NOT deleted. Reveal via the browser's Show Hidden button, or restore via Place tab → Format Filter → Restore Hidden."%noun)
+                # NOTE: PopupMenu has no per-item FONT color API in Godot 4.7 — tint the
+                # icon red instead, which keeps the destructive action visually distinct.
+                menu.set_item_icon_modulate(rm_idx,C_ERROR)
         menu.id_pressed.connect(_on_ctx_menu_id.bind(targets))
         add_child(menu)
         menu.position=Vector2i(get_viewport().get_mouse_position())
@@ -3084,14 +3186,27 @@ func _on_ctx_menu_id(id:int, targets:Array)->void:
                         if _active_group==-2: _rebuild_browser_now()
                         set_status(("Removed from Favorites: " if all_fav else "Added to Favorites: ")+_ctx_target_summary(targets),C_OK)
                 2:
-                        var removed:int=0
+                        # 2.5 rev 8.1 — the master _all_paths list is DISK TRUTH
+                        # now: removing only sets the hidden VIEW flag (the old
+                        # code also erased the path here, which is what made a
+                        # removed asset un-recoverable by refresh). If every
+                        # target is already hidden (menu opened while "Show
+                        # Hidden" is ON), this id RESTORES them instead.
+                        var all_hidden:bool=true
                         for p in targets:
-                                if not _hidden_paths.has(p): _hidden_paths.append(p)
-                                if _all_paths.has(p): _all_paths.erase(p)
-                                if _multi_selected.has(p): _multi_selected.erase(p)
-                                removed+=1
-                        _save_config(); _rebuild_browser_now()
-                        set_status("Removed %d asset(s) from the list (restorable)."%removed,C_WARN)
+                                if not _hidden_paths.has(p): all_hidden=false; break
+                        if all_hidden:
+                                var n:int=_unhide_paths(targets)
+                                _save_config(); _rebuild_browser_now()
+                                set_status("Restored %d asset(s) to the list."%n,C_OK)
+                        else:
+                                var removed:int=0
+                                for p in targets:
+                                        if not _hidden_paths.has(p): _hidden_paths.append(p)
+                                        if _multi_selected.has(p): _multi_selected.erase(p)
+                                        removed+=1
+                                _save_config(); _rebuild_browser_now()
+                                set_status("Removed %d asset(s) from the list (restorable via Show Hidden)."%removed,C_WARN)
                 3:
                         # 2.4 — Open Scene / View Model (single target only).
                         if targets.size()==1: _open_or_view_asset(targets[0] as String)
