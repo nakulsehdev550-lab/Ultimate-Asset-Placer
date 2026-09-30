@@ -2,7 +2,7 @@
 
 **Professional 3D asset placement tool for Godot 4.7+** — place, paint, scatter, spline, and physics-drop your assets with a fast, tactile editor UI. Optimised for thousands of assets.
 
-![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.5.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.5.1-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ![Ultimate Asset Placer in the Godot editor](screenshots/editor_overview.png)
 
@@ -17,8 +17,37 @@
 - **Random transforms** — random rotation, tilt, and scale, per placement.
 - **Groups & Favorites** — organise assets into named collections, random group placement.
 - **Material override & auto collision** — Replace/Next-Pass materials, Static/Rigid/Character/Area bodies with five shape types.
-- **Physics tab** — lift, drop, tumble and settle existing scene objects entirely inside the editor.
+- **Physics tab** — lift, drop, tumble and settle existing scene objects inside the editor using your project's own physics engine (Jolt or Godot Physics).
 - **Asset Zoo** — lays out your whole library in a 3D grid for inspection.
+
+## What's new in v2.5.1 — the Physics tab now runs your project's own physics engine
+
+**Real physics, in the editor.** The Physics tab's drop-and-settle simulation
+was rebuilt from the ground up. Instead of a hand-rolled approximation, every
+selected object becomes a **real rigid body** inside a private physics space
+driven by **your project's own 3D physics engine** — Jolt Physics if installed,
+otherwise Godot Physics. Falling, bouncing, rolling, momentum between objects,
+and coming to rest are all handled by the same C++ solver your game runs at
+runtime.
+
+- **Spheres behave like spheres.** Balls roll, stack, and settle against each
+  other with exact contact heights — no more floating on a corner or edge, no
+  more jittering piles, no more launching across the scene. Convex-hull
+  collision works properly, and trimesh terrain is fully supported as the
+  landing world.
+- **Fast.** The broadphase, narrowphase, and solver all run inside the engine:
+  dropping hundreds of objects keeps the editor responsive (a 200-ball drop
+  simulates with the editor still running at full frame rate in testing), and
+  objects that have settled cost nothing.
+- **Nothing is added to your scene.** Temporary collision, static mirrors of
+  your level, and the physics bodies themselves all live inside the physics
+  server only — saving mid-simulation can never leak anything into your
+  .tscn, and a crashed editor leaves nothing behind to clean up.
+- **Your scene stays frozen.** The simulation runs in its own space, so
+  nothing you didn't select can move, and your project's physics settings
+  (including Jolt) are used exactly as configured.
+
+![Real engine physics: 200 spheres dropped and settled in the editor](screenshots/physics_engine_pile.png)
 
 ## What's new in v2.5.0 — the star, fixed for real; quieter, tighter panel
 

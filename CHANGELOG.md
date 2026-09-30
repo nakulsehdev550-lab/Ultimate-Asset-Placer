@@ -1,3 +1,66 @@
+## v2.5.1 — the Physics tab now runs your project's own physics engine
+
+The Physics tab's drop-and-settle simulation was rewritten from scratch. The
+previous approach was a hand-rolled GDScript simulation that swept every
+object's shape against the scene each frame — each object treated every other
+object as an immovable wall, spheres could not roll, piles jittered or
+launched across the scene, objects could hover on a corner or edge, and large
+batches were slow. The new version runs **real engine physics** entirely
+inside the editor, on the project's own 3D physics engine (Jolt Physics if
+installed, otherwise Godot Physics), with the same public UI: Lift Selected,
+Gravity, Bounciness, Friction, Align to Ground, Random Tumble, Max Fall Time,
+Auto-Stop, Auto-Add Missing Collision and Auto Shape all work exactly as
+before.
+
+#### How it works
+- When a simulation starts, the plugin creates a **private physics space** and
+  re-activates the editor's dormant physics server — from that moment the
+  engine itself steps the simulation on every physics tick, in C++.
+- Every selected object becomes a **real rigid body**: its existing collision
+  (convex shapes, hulls, compounds) is mirrored onto the body with scale
+  baked in; concave trimesh collision is replaced by convex hulls of the
+  object's meshes, because a moving body needs convex shapes.
+- Every solid collider in the scene that is **not** being simulated — floors,
+  terrain, props, trimesh worlds — is mirrored in as static geometry, so
+  there is always a real world to land on.
+- The scene's own space is **frozen** for the duration: nothing you didn't
+  select can move, and your project's physics settings (Jolt included) are
+  used exactly as configured. When the simulation ends everything is restored
+  to how the editor had it.
+
+#### What this fixes
+- **Multiple spheres with hull collision now behave correctly** — real
+  contact solving with momentum exchange, rolling, stacking, and exact rest
+  heights (stacked spheres rest at precisely 2×radius, then fall asleep).
+  No more jittering piles, sideways launches, or corner-hovering.
+- **Mass is real** (volume-based), so heavier objects push lighter ones and
+  mixed piles settle the way they should.
+- **Rolling resistance** is approximated with light body damping, so balls
+  come to rest visibly instead of rolling forever on an ideal plane.
+- **Performance**: broadphase, narrowphase and solving all happen inside the
+  engine. A 196-sphere drop settles in ~7 s with the editor still running at
+  full frame rate during the entire simulation; settled bodies cost nothing.
+- **Scene safety**: nothing is ever added to the scene tree — no temporary
+  collision nodes, nothing to save by accident, nothing left behind if the
+  editor crashes mid-simulation. Baked results are a single undo step;
+  Cancel restores every object exactly.
+- **Random Tumble** now applies real angular velocity that interacts with
+  every impact, instead of a fake cosmetic spin.
+
+#### Under the hood (for the curious)
+- Fixed several engine-level pitfalls discovered while building this: brand
+  new physics bodies report "sleeping" until first stepped (settle detection
+  waits for real integration), physics bodies must be detached from their
+  space before being freed while in contact (a Jolt module crash), changing
+  an area parameter wakes every body in the space (the Gravity slider only
+  pushes on change), and the world space is restored last so the editor's
+  dormant state is reproduced exactly.
+- Verified against a real Godot 4.7.1 editor on both Jolt Physics and
+  Godot Physics with a 13-step automated physics harness (exact rest heights,
+  pile non-overlap, trimesh worlds, hull props, cancel/undo, world-freeze
+  protection, legacy temp-collision cleanup, 200-sphere batch) plus the full
+  81-step UI regression suite — all passing, zero crashes.
+
 # Ultimate Asset Placer — Changelog
 
 ## v2.5.0 — the favorite star fixed for real + quieter, tighter panel
