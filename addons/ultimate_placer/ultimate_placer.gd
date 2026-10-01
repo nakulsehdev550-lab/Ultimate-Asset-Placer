@@ -11,11 +11,8 @@ const HOLD_DELAY      := 0.35
 const HOLD_RATE_SLOW  := 0.12
 const HOLD_RATE_FAST  := 0.022
 const HOLD_ACCEL_TIME := 1.5
-## Brush painting used to fire once per raw mouse-motion event with no gate at
-## all — OS/driver mouse-move event rates vary wildly, so painting slowly
-## (many events, little distance) could deposit unbounded amounts in one spot
-## while a fast sweep deposited comparatively little. Gate it to a fixed wall
-## clock rate instead so density is consistent regardless of input event noise.
+## Wall-clock gate for brush stamping so deposit density is independent of
+## the OS mouse-event rate.
 const BRUSH_PAINT_INTERVAL_MSEC := 30
 
 var editor_plugin: EditorPlugin = null
@@ -31,10 +28,9 @@ var _last_hit_kind: int = GridPlane.FLOOR
 var _is_placing:     bool    = false
 var _asset_path:     String  = ""
 var _ghost:          Node3D  = null
-## 2.5 rev 8 — the grid is three independent MeshInstance3D nodes (floor,
-## X wall, Z wall) so each plane can follow the viewport camera on its own
-## schedule. Lines are generated in LOCAL space; _update_grid_follow()
-## positions the nodes every frame.
+## The grid is three independent MeshInstance3D nodes (floor, X wall, Z wall)
+## so each plane can follow the viewport camera on its own schedule. Lines are
+## generated in LOCAL space; _update_grid_follow() positions the nodes.
 var _grid_mis:       Array   = []
 ## Last camera that sent the plugin editor input — the viewport the user is
 ## actually navigating. The grid follow logic prefers it over viewport 0.
@@ -51,16 +47,28 @@ var _held_keys: Dictionary = {}
 var _mm_instances:  Dictionary = {}
 var _mm_transforms: Dictionary = {}
 var _mm_parent:     Node3D     = null
-var _mm_stroke_counts_before: Dictionary = {}
-var _mm_stroke_had_paint:     bool       = false
+var _mm_stroke_snapshot: Dictionary = {}   # path -> full transform-array copy taken at stroke start
+var _mm_stroke_had_paint: bool       = false
 
-# Vertex-snap mesh cache — rebuilding the full scene mesh list used to happen
-# on EVERY mouse-motion event while in Vertex mode (a real perf cliff on
-# scenes with thousands of meshes, which is exactly what this plugin is
-# advertised for). Instead we cache it and only mark it dirty when the
-# scene tree actually changes.
+# Vertex-snap caches. Both are rebuilt only when the scene tree changes —
+# rebuilding per mouse-move is far too slow on large scenes.
 var _vertex_mesh_cache:  Array = []
 var _vertex_cache_dirty: bool  = true
+var _vertex_pool_cache:  Dictionary = {}   # Mesh RID -> sampled vertex pool
+## Screen-space vertex tests per mouse move (vertex mode worst case). Keeps a
+## huge mesh library from stalling the viewport while painting.
+const VERTEX_TEST_BUDGET := 20000
+## Upper bound on deduped vertices sampled per mesh for Mesh Vertex Snap.
+const VERTEX_POOL_MAX := 512
+
+## Paint-stroke undo buffering: stamps deposited while the button is held are
+## collected here and committed as ONE undo action on release, so a brush
+## stroke cannot flood (and evict) the editor's undo history. Entries carry
+## the placed root, its optional _Collision sibling and the parent node, so
+## undo/redo can detach and re-attach them without freeing (a freed Object
+## argument would break the SECOND undo after a redo inside UndoRedo).
+var _stroke_active:       bool    = false
+var _stroke_roots:        Array   = []   # of {pr, col, par}
 
 func _ready() -> void:
         if not Engine.is_editor_hint(): return
@@ -126,7 +134,11 @@ func apply_preset_orient(rx: float, ry: float, rz: float) -> void:
 
 func cancel_placement() -> void:
         _is_placing = false; _lmb_down = false; _has_valid_pos = false
-        _held_keys.clear(); _mm_stroke_had_paint = false; _mm_stroke_counts_before.clear()
+        _held_keys.clear()
+        # Commit (not discard) any in-flight stroke: the stamps already exist
+        # in the scene, so they must stay undoable.
+        _stroke_end(true)
+        _mm_stroke_had_paint = false; _mm_stroke_snapshot.clear()
         _brush_painting = false
         _brush_stroke_rids.clear()
         _remove_ghost(); _remove_brush_ghost(); _remove_grid()
@@ -161,9 +173,21 @@ func rebuild_grid() -> void:
 func cleanup() -> void:
         _remove_ghost(); _remove_brush_ghost(); _remove_grid()
         _mm_instances.clear(); _mm_transforms.clear()
-        _mm_stroke_counts_before.clear(); _mm_parent = null
+        _mm_stroke_snapshot.clear(); _mm_parent = null
+        _stroke_active = false; _stroke_roots.clear()
+        _vertex_pool_cache.clear()
         _brush_image = null
         _brush_stroke_rids.clear()
+
+func _notification(what: int) -> void:
+        # Alt-tab while holding a rotate/scale key would otherwise auto-repeat
+        # forever: the viewport never sees the key release. Also close any
+        # in-flight paint stroke so the next press cannot merge into it.
+        if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+                _held_keys.clear()
+                if _stroke_active:
+                        _stroke_end(true)
+                        _brush_painting = false
 
 func instantiate_resource_pub(res: Resource) -> Node3D:
         return _instantiate_resource(res)
@@ -244,8 +268,10 @@ func handle_input(camera: Camera3D, event: InputEvent) -> bool:
                                 if _get_bool("paint_mode") and _get_bool("paint_as_brush"):
                                         _brush_painting = true
                                         _last_brush_paint_msec = 0
+                                        _stroke_begin()
                                 else:
                                         if _get_bool("multimesh_mode"): _mm_stroke_begin()
+                                        else: _stroke_begin()
                                         var pos: Variant = _world_hit(camera, mb.position)
                                         if pos == null and _has_valid_pos: pos = _last_world_pos
                                         if pos != null: _last_paint_pos = pos; _commit_place(pos)
@@ -254,6 +280,7 @@ func handle_input(camera: Camera3D, event: InputEvent) -> bool:
                                         return false
                                 _lmb_down = false
                                 _brush_painting = false
+                                _stroke_end(true)
                                 if _get_bool("multimesh_mode"): _mm_stroke_end()
                         return true
                 if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
@@ -365,8 +392,8 @@ func _hit_grid(camera: Camera3D, mp: Vector2) -> Variant:
 func _hit_grid_ray(org: Vector3, dir: Vector3) -> Vector3:
         var gy := _get_float("grid_height"); var gs := _get_float("grid_size")
         var best_t := INF
-        # Floor fallback (the old far-away projection) — used only if NO real
-        # intersection exists anywhere (ray parallel to every enabled plane).
+        # Far-projection fallback — used only when the ray is parallel to
+        # every enabled plane and no real intersection exists.
         var best_pos := Vector3(org.x + dir.x*100.0, gy, org.z + dir.z*100.0)
         var best_kind: int = GridPlane.FLOOR
         var hf: Variant = Plane(Vector3.UP, gy).intersects_ray(org, dir)
@@ -396,8 +423,6 @@ func _hit_grid_ray(org: Vector3, dir: Vector3) -> Vector3:
                         if gs > 0.0: p.z = snapped(p.z, gs); p.y = snapped(p.y, gs)
                 _:
                         p.y = gy
-                        # "Snap to Grid" now actually governs floor snapping, the
-                        # way the docs always promised (it used to be a dead toggle).
                         if _get_bool("grid_enabled") and gs > 0.0:
                                 p.x = snapped(p.x, gs); p.z = snapped(p.z, gs)
         return p
@@ -417,7 +442,8 @@ func _hit_vertex(camera: Camera3D, mp: Vector2) -> Variant:
         if free_pos == null: return null
         var fp := free_pos as Vector3
 
-        var ghost_offsets: Array[Vector3] = []
+        # Ghost contact points: 8 AABB corners per ghost mesh, in world space.
+        var ghost_world: Array[Vector3] = []
         if is_instance_valid(_ghost):
                 var gm: Array = []; _collect_meshes(_ghost, gm)
                 for mi_raw in gm:
@@ -427,31 +453,85 @@ func _hit_vertex(camera: Camera3D, mp: Vector2) -> Variant:
                         for cx in [0,1]:
                                 for cy in [0,1]:
                                         for cz in [0,1]:
-                                                ghost_offsets.append((gmi.global_transform*(ab.position+Vector3(ab.size.x*cx,ab.size.y*cy,ab.size.z*cz))) - _ghost.global_position)
-        if ghost_offsets.is_empty(): return fp
+                                                ghost_world.append(gmi.global_transform * (ab.position + Vector3(ab.size.x*cx,ab.size.y*cy,ab.size.z*cz)))
+        if ghost_world.is_empty(): return fp
+
+        # Project the ghost points once — all snapping tests are screen-space
+        # Vector2 distances after this point.
+        var ghost_sv: Array[Vector2] = []
+        for gw in ghost_world:
+                if camera.is_position_in_frustum(gw):
+                        ghost_sv.append(camera.unproject_position(gw))
+                else:
+                        ghost_sv.append(Vector2.INF)
+        var snap_candidates: Array[Vector2] = []
+        var snap_indices: Array[int] = []
+        for i in ghost_sv.size():
+                if ghost_sv[i] != Vector2.INF:
+                        snap_candidates.append(ghost_sv[i]); snap_indices.append(i)
+        if snap_candidates.is_empty(): return fp
 
         var best_sd   := _get_float("vertex_snap_strength")
         var best_pos: Variant = null
         if _vertex_cache_dirty:
-                _vertex_mesh_cache.clear()
+                _vertex_mesh_cache.clear(); _vertex_pool_cache.clear()
                 _collect_meshes(root, _vertex_mesh_cache)
                 _vertex_cache_dirty = false
+        # "Mesh Vertex Snap" tests the mesh's real geometry (sampled, deduped
+        # vertex pool); the default tests the 8 AABB corners per mesh, which is
+        # dramatically cheaper and adequate for blocky assets.
+        var use_vertices := _get_bool("vertex_snap_mesh")
+        var budget := VERTEX_TEST_BUDGET
         for mi_raw in _vertex_mesh_cache:
                 var mi := mi_raw as MeshInstance3D
                 if not is_instance_valid(mi) or mi.mesh == null or _is_ghost_child(mi): continue
-                var xform := mi.global_transform; var aabb := mi.mesh.get_aabb()
-                for cx in [0,1]:
-                        for cy in [0,1]:
-                                for cz in [0,1]:
-                                        var tw := xform*(aabb.position+Vector3(aabb.size.x*cx,aabb.size.y*cy,aabb.size.z*cz))
-                                        if not camera.is_position_in_frustum(tw): continue
-                                        var t_sv := camera.unproject_position(tw)
-                                        for goff in ghost_offsets:
-                                                var gc := fp + goff
-                                                if not camera.is_position_in_frustum(gc): continue
-                                                var sd := camera.unproject_position(gc).distance_to(t_sv)
-                                                if sd < best_sd: best_sd = sd; best_pos = fp + (tw - gc)
+                var xform := mi.global_transform
+                var world_pts: PackedVector3Array
+                if use_vertices:
+                        world_pts = _vertex_pool_for(mi.mesh)
+                else:
+                        var aabb := mi.mesh.get_aabb()
+                        world_pts = PackedVector3Array()
+                        for cx in [0,1]:
+                                for cy in [0,1]:
+                                        for cz in [0,1]:
+                                                world_pts.append(aabb.position + Vector3(aabb.size.x*cx,aabb.size.y*cy,aabb.size.z*cz))
+                for wv in world_pts:
+                        if budget <= 0: break
+                        budget -= 1
+                        var tw := xform * wv
+                        if not camera.is_position_in_frustum(tw): continue
+                        var t_sv := camera.unproject_position(tw)
+                        for k in snap_candidates.size():
+                                var sd := t_sv.distance_to(snap_candidates[k])
+                                if sd < best_sd:
+                                        best_sd = sd
+                                        best_pos = fp + (tw - ghost_world[snap_indices[k]])
+                if budget <= 0: break
         return best_pos if best_pos != null else fp
+
+func _vertex_pool_for(mesh: Mesh) -> PackedVector3Array:
+        ## Deduped, size-capped sample of a mesh's real vertices (triangle-soup
+        ## faces walked with a stride, quantized to ~1 cm for dedupe). Cached
+        ## per Mesh resource alongside the scene-mesh cache.
+        var rid := mesh.get_rid()
+        if _vertex_pool_cache.has(rid): return _vertex_pool_cache[rid]
+        var pool := PackedVector3Array()
+        var seen: Dictionary = {}
+        var faces := mesh.get_faces()
+        var total := faces.size()
+        if total > 0:
+                var stride := maxi(1, int(total / float(VERTEX_POOL_MAX * 3)))
+                var i := 0
+                while i < total and pool.size() < VERTEX_POOL_MAX:
+                        var v := faces[i]
+                        var key := Vector3i(int(round(v.x * 100.0)), int(round(v.y * 100.0)), int(round(v.z * 100.0)))
+                        if not seen.has(key):
+                                seen[key] = true
+                                pool.append(v)
+                        i += stride
+        _vertex_pool_cache[rid] = pool
+        return pool
 
 func _spawn_ghost(path: String) -> void:
         _remove_ghost()
@@ -470,18 +550,12 @@ func _spawn_ghost(path: String) -> void:
 
 func _remove_ghost() -> void:
         if is_instance_valid(_ghost):
-                # Godot bug #85817 hardening: the ghost carries SHARED ghost materials in
-                # override slots (multi-mesh assets get one per-mesh copy now, but older
-                # patterns and the asset's own pre-existing overrides can still be
-                # shared). Wipe the override slots while the instance is alive so the
-                # renderer never processes dangling material RIDs for this node.
+                # godotengine/godot#85817: freeing geometry whose override slots
+                # reference shared materials spams renderer errors — clear the
+                # slots while the instance is still alive.
                 _clear_override_slots(_ghost)
-                # queue_free() is deferred, not immediate — if a new ghost is spawned
-                # within the same frame (e.g. rapidly switching assets), the old one
-                # would still technically be in the tree and collide on name with the
-                # replacement. Rename it out of the way first, matching the same
-                # defensive pattern already used for spline layer rebuilds in
-                # uap_path.gd (_nodes[idx].name = "del_"+str(randi()) before queue_free).
+                # queue_free() is deferred: rename first so a replacement spawned
+                # within the same frame cannot collide on name.
                 _ghost.name = "del_" + str(randi())
                 _ghost.queue_free(); _ghost = null
 
@@ -502,8 +576,13 @@ func _move_ghost(world_pos: Vector3) -> void:
                 var norm := _surface_normal.normalized()
                 if norm.length_squared() < 0.5: norm = Vector3.UP
                 var fb := _build_surface_basis(norm)
-                var mesh := _ghost_first_mesh()
-                var push := _aabb_push_along_normal(mesh, fb, norm) if mesh != null else 0.0
+                # Push the ghost out of the surface along the normal — deepest
+                # AABB corner across ALL ghost meshes, matching the commit path.
+                var push := 0.0
+                var meshes: Array = []; _collect_meshes(_ghost, meshes)
+                for m_raw in meshes:
+                        var m2 := m_raw as MeshInstance3D
+                        if m2.mesh != null: push = maxf(push, _aabb_push_along_normal(m2.mesh, fb, norm))
                 final_pos = world_pos + norm*(push+ho)
                 var scl := _get_effective_scale()
                 _ghost.global_position = final_pos
@@ -548,13 +627,6 @@ func _aabb_push_along_normal(mesh: Mesh, rot: Basis, normal: Vector3) -> float:
                                 min_proj = minf(min_proj, (rot*(aabb.position+Vector3(aabb.size.x*cx,aabb.size.y*cy,aabb.size.z*cz))).dot(normal))
         return 0.0 if (min_proj == INF or min_proj >= 0.0) else -min_proj
 
-func _ghost_first_mesh() -> Mesh:
-        if not is_instance_valid(_ghost): return null
-        var gm: Array = []; _collect_meshes(_ghost, gm)
-        for r in gm:
-                if (r as MeshInstance3D).mesh != null: return (r as MeshInstance3D).mesh
-        return null
-
 func _colorize_ghost(node: Node) -> void:
         if node is MeshInstance3D:
                 var mi := node as MeshInstance3D
@@ -577,23 +649,14 @@ func _colorize_ghost(node: Node) -> void:
                                 for i in sc: mi.set_surface_override_material(i, mat)
         for c in node.get_children(): _colorize_ghost(c)
 
-## Wipes every material OVERRIDE slot on a whole node tree (material_override,
-## material_overlay and every per-surface override) WITHOUT touching the
-## mesh's own baked-in surface materials. Call this on a node tree RIGHT
-## BEFORE queue_free()ing it.
+## Wipes every material OVERRIDE slot on a node tree (material_override,
+## material_overlay and all per-surface overrides) without touching the mesh's
+## own surface materials. Call right before queue_free()ing the tree.
 ##
-## WHY THIS EXISTS — Godot engine bug godotengine/godot#85817 (open, Forward+):
-## when geometry instances that reference a SHARED material via override
-## slots are deleted, the renderer's deferred instance update still processes
-## the (now dangling) material RIDs and spams exactly these four errors per
-## dirty instance:
-##   material_casts_shadows            - Parameter "material" is null
-##   material_is_animated              - Parameter "material" is null
-##   material_get_instance_shader_parameters - Parameter "material" is null
-##   material_update_dependency        - Parameter "material" is null
-## Clearing the override slots while the instance is still alive empties its
-## RID references, so nothing dangles when the free lands. The visual is not
-## affected because the node is about to be deleted anyway.
+## godotengine/godot#85817: freeing geometry whose override slots reference a
+## SHARED material leaves the renderer's deferred instance update processing
+## dangling material RIDs ("Parameter \"material\" is null" errors). Clearing
+## the slots while the instances are alive prevents it.
 func _clear_override_slots(node: Node) -> void:
         if node is MeshInstance3D:
                 var mi := node as MeshInstance3D
@@ -611,14 +674,12 @@ func _build_grid(root: Node3D) -> void:
         var mat := StandardMaterial3D.new()
         mat.vertex_color_use_as_albedo = true; mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
         mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED; mat.flags_do_not_receive_shadows = true
-        # 2.5 rev 8 — each plane is its own mesh so it can ride the viewport
-        # camera independently. Lines are generated in LOCAL space around the
-        # origin; _update_grid_follow() positions the nodes every frame, and
-        # because node positions snap to whole Grid Size multiples (the bright
-        # every-5th rhythm to 5x multiples) the lines always land on the same
-        # world coordinates — the grid extends wherever the camera goes instead
-        # of hugging the world center. "View Distance" is the floor's half-extent
-        # in meters (GRID_LINES*gs used to be hardwired at 40).
+        # Each plane is its own mesh so it can follow the viewport camera
+        # independently. Lines are generated in LOCAL space around the origin;
+        # node positions snap to whole Grid Size multiples so the lines always
+        # land on the same world coordinates — the grid extends wherever the
+        # camera goes instead of hugging the world center. View Distance is the
+        # floor's half-extent in meters.
         var vd := _get_float("grid_view_dist")
         if vd <= 0.0: vd = 40.0
         var nf := clampi(int(vd / gs), 1, 10000)
@@ -699,8 +760,8 @@ func _build_wall_mesh(gs: float, along_x: bool) -> ImmediateMesh:
         im.surface_end()
         return im
 
-## 2.5 rev 8 — infinite-grid follow, called every frame from _process. Moves
-## each grid node so its extent re-centers around the active viewport camera.
+## Infinite-grid follow, called every frame from _process. Moves each grid
+## node so its extent re-centers around the active viewport camera.
 ## Positions snap to 5x Grid Size multiples, so the drawn lines never slide
 ## with the camera — they stay locked onto the same world coordinates and the
 ## grid just extends wherever the camera goes (a small part still covers the
@@ -793,7 +854,10 @@ func _snap_xz(pos: Vector3) -> Vector3:
 
 func _commit_place(world_pos: Vector3) -> void:
         if _asset_path.is_empty(): return
-        var root := EditorInterface.get_edited_scene_root(); if root == null: return
+        var root := EditorInterface.get_edited_scene_root()
+        # 2D scenes (and no scene at all) can never host a placement — bail
+        # BEFORE instantiating anything, or every click leaks a node.
+        if root == null or not root is Node3D: return
         var place_path := _get_place_path(); if place_path.is_empty(): return
 
         if _get_bool("multimesh_mode"): _mm_paint(world_pos); return
@@ -848,13 +912,93 @@ func _commit_place(world_pos: Vector3) -> void:
         if editor_plugin != null:
                 var ur := editor_plugin.get_undo_redo()
                 _do_place(node, parent, pos, rx, ry, rz, scl, align_normal, norm, sc, cbt, cst, cu, me, mp2, unpack_scenes, place_path, dname, mode == PlaceMode.SURFACE)
-                var pr := _find_placed_root(node)
-                ur.create_action("UAP: Place " + dname)
-                ur.add_do_method(self, "_redo_place", place_path, parent, pos, rx, ry, rz, scl, align_normal, norm, sc, cbt, cst, cu, me, mp2, unpack_scenes, place_path, dname, mode == PlaceMode.SURFACE)
-                ur.add_undo_method(self, "_undo_place", pr)
-                ur.commit_action(false)
+                var rec := _placement_record(node, parent)
+                if _stroke_active:
+                        # Part of a paint stroke: collect and commit the whole
+                        # stroke as one undo action on mouse release.
+                        _stroke_roots.append(rec)
+                else:
+                        _commit_placement_action(ur, "UAP: Place " + dname, [rec])
         else:
                 _do_place(node, parent, pos, rx, ry, rz, scl, align_normal, norm, sc, cbt, cst, cu, me, mp2, unpack_scenes, place_path, dname, mode == PlaceMode.SURFACE)
+
+func _placement_record(node: Node3D, parent: Node3D) -> Dictionary:
+        ## Snapshot of one placement for undo purposes: the placed root (the
+        ## RigidBody3D wrapper when auto-collision reparented the mesh), its
+        ## optional "_Collision" sibling body, and the parent they live under.
+        var pr := _find_placed_root(node)
+        var col: Node = null
+        if is_instance_valid(pr) and not (pr is RigidBody3D):
+                var par := pr.get_parent()
+                if is_instance_valid(par):
+                        col = par.get_node_or_null(String(pr.name) + "_Collision")
+        return {"pr": pr, "col": col, "par": parent}
+
+func _open_scene_undo_action(ur: EditorUndoRedoManager, action_name: String) -> void:
+        ## Creates the action in the edited scene's undo history. Actions that
+        ## reference scene nodes via add_do_reference/add_undo_reference must
+        ## live in that history — the default plugin context is the GLOBAL
+        ## history, and every reference then fails a history check on commit.
+        var scene_root := EditorInterface.get_edited_scene_root()
+        if scene_root != null: ur.create_action(action_name, 0, scene_root)
+        else: ur.create_action(action_name)
+
+func _commit_placement_action(ur: EditorUndoRedoManager, action_name: String, records: Array) -> void:
+        ## Registers a placement (or a whole paint stroke) as one undoable
+        ## action. Undo DETACHES the placed nodes instead of freeing them, and
+        ## the nodes are handed to the undo system via add_do_reference: they
+        ## stay alive for unlimited undo/redo cycles and are freed only when
+        ## the action leaves the history while undone. (Binding a freed node
+        ## as a method argument makes every undo after the first fail with a
+        ## conversion error inside UndoRedo.)
+        if ur == null or records.is_empty(): return
+        _open_scene_undo_action(ur, action_name)
+        for rec in records:
+                var pr: Node3D = rec["pr"]
+                var col: Node = rec["col"]
+                var par: Node = rec["par"]
+                if not is_instance_valid(pr): continue
+                ur.add_do_method(self, "_place_attach_pair", pr, col, par)
+                ur.add_undo_method(self, "_place_detach_pair", pr, col)
+                ur.add_do_reference(pr)
+                if is_instance_valid(col): ur.add_do_reference(col)
+        ur.commit_action(false)
+
+func _place_detach_pair(pr: Node3D, col: Node) -> void:
+        if is_instance_valid(col) and col.is_inside_tree():
+                col.get_parent().remove_child(col)
+        if is_instance_valid(pr) and pr.is_inside_tree():
+                _clear_override_slots(pr)
+                pr.get_parent().remove_child(pr)
+
+func _place_attach_pair(pr: Node3D, col: Node, par: Node) -> void:
+        if not is_instance_valid(pr) or pr.is_inside_tree(): return
+        var p := par
+        if not is_instance_valid(p): p = EditorInterface.get_edited_scene_root()
+        if not is_instance_valid(p): return
+        p.add_child(pr)
+        if is_instance_valid(col) and not col.is_inside_tree():
+                p.add_child(col)
+
+func _stroke_begin() -> void:
+        if _stroke_active: return
+        _stroke_active = true
+        _stroke_roots.clear()
+
+func _stroke_end(commit: bool) -> void:
+        if not _stroke_active: return
+        _stroke_active = false
+        var records := _stroke_roots
+        _stroke_roots = []
+        if not commit or records.is_empty() or editor_plugin == null: return
+        var ur := editor_plugin.get_undo_redo()
+        _commit_placement_action(ur, "UAP: Paint Stroke (%d)" % records.size(), records)
+        # Restore the per-stamp selection the buffering skipped: after the
+        # stroke, the last object placed is the one the user expects selected.
+        var last_root: Node3D = (records.back() as Dictionary).get("pr") as Node3D
+        if is_instance_valid(last_root):
+                EditorInterface.get_selection().clear()
+                EditorInterface.get_selection().add_node(last_root)
 
 func _do_place(node: Node3D, parent: Node3D, pos: Vector3,
                 rx: float, ry: float, rz: float, scl: Vector3,
@@ -871,11 +1015,9 @@ func _do_place(node: Node3D, parent: Node3D, pos: Vector3,
         base_name = base_name.replace(" ", "_")
         if base_name.is_empty(): base_name = "Asset"
         # Ensure uniqueness among siblings without relying on Godot's @NodeXXX fallback.
-        # When RigidBody auto-collision is used (btype == 1) the mesh node is reparented
-        # inside a "<base_name>_RB" wrapper, so parent.has_node(base_name) always returns
-        # false and every tree gets the same base name → duplicate _RB names → Godot renames
-        # them to @RigidBody3D@XXXXX → _find_placed_root can't detect them → undo fails.
-        # Fix: also check for the _RB wrapper so each successive placement gets a fresh suffix.
+        # With RigidBody auto-collision the mesh node is reparented inside a
+        # "<base_name>_RB" wrapper, so parent.has_node(base_name) stays false and
+        # every placement would take the same base name; check the wrapper name too.
         if parent.has_node(base_name) or parent.has_node(base_name + "_RB"):
                 var idx := 2
                 while parent.has_node("%s_%d" % [base_name, idx]) or \
@@ -933,13 +1075,21 @@ func _do_place(node: Node3D, parent: Node3D, pos: Vector3,
                 var mm2 := int(panel.get("material_override_mode")) if is_instance_valid(panel) else 0
                 if mat != null: _apply_material_override(node, mat, mm2)
 
-        EditorInterface.get_selection().clear(); EditorInterface.get_selection().add_node(node)
+        # Per-stamp selection churn is skipped while a stroke is active (see
+        # _stroke_end for the once-per-stroke selection).
+        if not _stroke_active:
+                EditorInterface.get_selection().clear()
+                EditorInterface.get_selection().add_node(node)
         
         if spawn_col:
                 _add_collision(node, btype, stype, unpack_scenes)
                 _collect_rids(node, _brush_stroke_rids)
 
         node.scale = scl * 0.01
+        # Strokes skip the pop-in tween (and per-stamp selection churn).
+        if _stroke_active:
+                node.scale = scl
+                return
         var tw := node.create_tween()
         tw.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
         tw.tween_property(node,"scale",scl*1.10,0.09)
@@ -952,27 +1102,12 @@ func _build_surface_basis_from(up: Vector3, rx: float, ry: float, rz: float) -> 
         elif up.dot(-Vector3.UP) > 0.9999:   return Basis.from_euler(Vector3(deg_to_rad(180.0+rx),deg_to_rad(ry),deg_to_rad(rz)))
         else: return Basis(Quaternion(Vector3.UP,up)) * Basis.from_euler(euler)
 
-func _redo_place(asset_path: String, parent: Node3D, pos: Vector3,
-                rx: float, ry: float, rz: float, scl: Vector3,
-                align_normal: bool, norm: Vector3,
-                spawn_col: bool, btype: int, stype: int, cu: bool,
-                mat_en: bool, mat_path: String, unpack_scenes: bool, 
-                place_path: String, desired_name: String, is_surf_mode: bool = false) -> void:
-                        
-        if not ResourceLoader.exists(asset_path) or not is_instance_valid(parent): return
-        var res := ResourceLoader.load(asset_path, "", ResourceLoader.CACHE_MODE_REUSE)
-        if res == null: return
-        var node := _instantiate_resource(res); if node == null: return
-        _do_place(node, parent, pos, rx, ry, rz, scl, align_normal, norm, spawn_col, btype, stype, cu, mat_en, mat_path, unpack_scenes, place_path, desired_name, is_surf_mode)
-
 func _find_placed_root(node: Node3D) -> Node3D:
         if not is_instance_valid(node): return node
         var par := node.get_parent()
-        # When RigidBody auto-collision is used, the mesh node is reparented inside a
-        # new RigidBody3D wrapper.  The wrapper is the true undo target.
-        # We identify it by type (RigidBody3D) and by the naming convention
-        # "<meshname>_RB" — but also accept any RigidBody3D parent whose name ends
-        # with "_RB" in case Godot uniquified the mesh node name after reparenting.
+        # With RigidBody auto-collision the wrapper is the true undo target:
+        # identify it by type and the "<meshname>_RB" naming convention (accept
+        # any _RB-suffixed RigidBody3D parent in case Godot uniquified names).
         if is_instance_valid(par) and par is RigidBody3D:
                 var rb := par as RigidBody3D
                 if rb.name.ends_with("_RB"): return rb
@@ -993,26 +1128,6 @@ func _find_placed_siblings(node: Node3D) -> Array:
                                 roots.append(col)
         return roots
 
-func _undo_place(placed_root: Node3D) -> void:
-        if not is_instance_valid(placed_root): return
-        # Godot bug #85817 hardening: placed instances can carry a SHARED override
-        # material (Replace mode) on top of the asset's own per-surface overrides —
-        # exactly the combination whose deletion spams "Parameter material is
-        # null". Clear the slots while the nodes are still alive.
-        _clear_override_slots(placed_root)
-        # For RigidBody mode placed_root IS the RigidBody3D wrapper — its mesh child
-        # and CollisionShape3D children are freed automatically with it, so no
-        # sibling lookup is needed or correct.
-        # For StaticBody/Area/CharacterBody (no unpack) a sibling "_Collision" body
-        # was spawned next to the mesh node — remove that too.
-        if not (placed_root is RigidBody3D):
-                var par := placed_root.get_parent()
-                if is_instance_valid(par):
-                        var col_name := placed_root.name + "_Collision"
-                        var col := par.get_node_or_null(col_name)
-                        if is_instance_valid(col) and col != placed_root: col.queue_free()
-        placed_root.queue_free()
-
 func _resolve_parent(root: Node) -> Node3D:
         if is_instance_valid(panel):
                 var pn: Variant = panel.get("parent_node")
@@ -1024,47 +1139,96 @@ func _resolve_parent(root: Node) -> Node3D:
         return root as Node3D
 
 func mm_clear() -> void:
-        # This previously only reset in-memory tracking (_mm_instances etc.)
-        # without ever touching the scene — the "Clear" button looked like it
-        # worked (status message, internal state reset) but the painted
-        # MultiMesh geometry was still sitting in the scene the whole time,
-        # now silently disconnected from the plugin's own bookkeeping. Painting
-        # the same asset again afterward would then create a second, duplicate
-        # MultiMeshInstance3D rather than continuing the (still-visible) old one.
-        if is_instance_valid(_mm_parent):
-                # Deferred free — rename first so an immediate repaint can't collide
-                # with the not-yet-actually-removed node (see _remove_ghost() for
-                # the same pattern/reasoning).
-                _mm_parent.name = "del_" + str(randi())
-                _mm_parent.queue_free()
+        ## Clears every painted MultiMesh. The paint parent is detached and
+        ## handed to the undo system (undo re-attaches it); freeing happens
+        ## automatically once the action leaves the undo history.
         _mm_instances.clear(); _mm_transforms.clear()
-        _mm_stroke_counts_before.clear(); _mm_stroke_had_paint = false; _mm_parent = null
+        _mm_stroke_snapshot.clear(); _mm_stroke_had_paint = false
+        if not is_instance_valid(_mm_parent): _mm_parent = null; return
+        var parent := _mm_parent
+        var par_parent := parent.get_parent()
+        _mm_parent = null
+        var ur: Variant = editor_plugin.get_undo_redo() if editor_plugin != null else null
+        if ur == null:
+                # Deferred free — rename first so an immediate repaint can't
+                # collide with the not-yet-actually-removed node.
+                parent.name = "del_" + str(randi())
+                parent.queue_free()
+                return
+        if is_instance_valid(par_parent) and parent.is_inside_tree():
+                par_parent.remove_child(parent)
+        _open_scene_undo_action(ur, "UAP: Clear MultiMesh")
+        ur.add_do_method(self, "_detach_node", parent)
+        ur.add_undo_method(self, "_reattach_node", parent, par_parent)
+        ur.add_undo_reference(parent)
+        ur.commit_action(false)
 
-func mm_commit_to_scene() -> void: pass
+func mm_commit_to_scene() -> void:
+        ## "Commit MultiMesh": the painted geometry stays in the scene as
+        ## regular owned content; the plugin drops its bookkeeping and renames
+        ## the paint parent out of the UAP_ namespace, so a later painting
+        ## session starts a fresh MultiMesh instead of appending to this one.
+        var root := EditorInterface.get_edited_scene_root()
+        var target := _mm_parent if is_instance_valid(_mm_parent) else null
+        if target == null and root != null:
+                target = root.get_node_or_null("UAP_MultiMeshPaint") as Node3D
+        _mm_instances.clear(); _mm_transforms.clear()
+        _mm_stroke_snapshot.clear(); _mm_stroke_had_paint = false; _mm_parent = null
+        if target == null or root == null: return
+        var ur: Variant = editor_plugin.get_undo_redo() if editor_plugin != null else null
+        if ur == null: return
+        var old_name := String(target.name)
+        var new_name := "MultiMeshPaint"
+        var i := 2
+        while root.has_node(new_name):
+                new_name = "MultiMeshPaint_%d" % i; i += 1
+        _open_scene_undo_action(ur, "UAP: Commit MultiMesh")
+        ur.add_do_method(self, "_rename_node", target, new_name)
+        ur.add_undo_method(self, "_rename_node", target, old_name)
+        ur.commit_action(false)
+
+func _rename_node(node: Node, new_name: String) -> void:
+        if is_instance_valid(node): node.name = new_name
+
+func _detach_node(node: Node) -> void:
+        if is_instance_valid(node) and node.is_inside_tree():
+                node.get_parent().remove_child(node)
+
+func _reattach_node(node: Node, parent: Node) -> void:
+        if not is_instance_valid(node) or node.is_inside_tree(): return
+        var par := parent
+        if not is_instance_valid(par):
+                par = EditorInterface.get_edited_scene_root()
+        if is_instance_valid(par): par.add_child(node)
 
 func _mm_stroke_begin() -> void:
-        _mm_stroke_counts_before.clear(); _mm_stroke_had_paint = false
+        _mm_stroke_snapshot.clear(); _mm_stroke_had_paint = false
         for path in _mm_transforms.keys():
-                _mm_stroke_counts_before[path] = (_mm_transforms[path] as Array).size()
+                _mm_stroke_snapshot[path] = (_mm_transforms[path] as Array).duplicate()
 
 func _mm_stroke_end() -> void:
         if not _mm_stroke_had_paint: return
         _mm_stroke_had_paint = false
         if editor_plugin == null: return
         var ur := editor_plugin.get_undo_redo()
+        if ur == null: return
         ur.create_action("UAP: MultiMesh Paint Stroke")
         for path in _mm_transforms.keys():
-                var before: int = _mm_stroke_counts_before.get(path, 0)
-                var after:  int = (_mm_transforms[path] as Array).size()
-                if after > before:
-                        ur.add_do_method(self,   "_mm_restore_count", path, after)
-                        ur.add_undo_method(self, "_mm_restore_count", path, before)
+                var before: Array = _mm_stroke_snapshot.get(path, [])
+                var after: Array = _mm_transforms[path]
+                # Painting only ever appends — an equal size means this asset
+                # was untouched during the stroke.
+                if before.size() == after.size(): continue
+                # Transform ARRAYS are snapshotted, not counts: a count-based
+                # undo diverges as soon as undo and a newer repaint interleave.
+                ur.add_do_method(self,   "_mm_apply_transforms", path, after.duplicate())
+                ur.add_undo_method(self, "_mm_apply_transforms", path, before.duplicate())
         ur.commit_action(false)
 
-func _mm_restore_count(path: String, count: int) -> void:
-        if not _mm_transforms.has(path): return
-        var transforms: Array = _mm_transforms[path]
-        while transforms.size() > count: transforms.pop_back()
+func _mm_apply_transforms(path: String, transforms: Array) -> void:
+        # Duplicate: the payload belongs to the undo history; aliasing it
+        # would let later paint appends mutate stored undo state.
+        _mm_transforms[path] = transforms.duplicate()
         var mmi := _mm_instances.get(path) as MultiMeshInstance3D
         if not is_instance_valid(mmi): return
         var mm := mmi.multimesh; if mm == null: return
@@ -1078,22 +1242,23 @@ func mm_generate_collision() -> void:
         var stype := int(panel.get("collision_shape_type"))
         if stype == 0 and btype in [1,2]: stype = 1
         var generated := 0
+        var created: Array = []
+        var removed: Array = []
         for path in _mm_instances.keys():
                 var mmi := _mm_instances[path] as MultiMeshInstance3D
                 if not is_instance_valid(mmi): continue
                 var mm := mmi.multimesh; if mm == null or mm.instance_count == 0: continue
                 var base_mesh: Mesh = mm.mesh; if base_mesh == null: continue
                 var shape := _make_shape(base_mesh, stype); if shape == null: continue
-                # Regenerating should REPLACE this asset's collision, not accumulate a
-                # second set of bodies alongside the first every time the button is
-                # clicked (found while auditing node naming — this was previously
-                # also a naming bug, since the accumulated duplicate would collide
-                # on name; fixing the underlying accumulation is the more complete
-                # fix). Remove any previous collision for this exact MultiMesh first.
+                # Regenerating REPLACES this asset's collision instead of
+                # accumulating a second body set alongside the first. The old
+                # body is detached LIVE: do-methods only replay on redo, so
+                # detaching it merely inside the action would leave it in the
+                # scene (and collide on name with the new body).
                 var old_body := root.get_node_or_null(mmi.name+"_Collision")
                 if is_instance_valid(old_body):
-                        old_body.name = "del_" + str(randi())
-                        old_body.queue_free()
+                        removed.append(old_body)
+                        root.remove_child(old_body)
                 var body_node: Node3D
                 match btype:
                         0: body_node = StaticBody3D.new()
@@ -1101,29 +1266,49 @@ func mm_generate_collision() -> void:
                         2: body_node = CharacterBody3D.new()
                         3: body_node = Area3D.new()
                         _: body_node = StaticBody3D.new()
-                body_node.name = mmi.name+"_Collision"; root.add_child(body_node, true); body_node.owner = root
+                body_node.name = mmi.name+"_Collision"
+                root.add_child(body_node, true)
                 for i in mm.instance_count:
                         var cs := CollisionShape3D.new()
                         cs.name = "Shape_%d" % i
-                        cs.shape = shape; cs.position = _shape_center(base_mesh, stype)
-                        body_node.add_child(cs, true); cs.owner = root
-                        cs.global_transform = mm.get_instance_transform(i)
+                        cs.shape = shape
+                        body_node.add_child(cs, true)
+                        # Instance transforms are MMI-local; compose with the
+                        # MMI's world transform, and offset primitive shapes by
+                        # the mesh AABB center so they wrap the mesh itself.
+                        cs.global_transform = mmi.global_transform * (mm.get_instance_transform(i) as Transform3D) \
+                                * Transform3D(Basis(), _shape_center(base_mesh, stype))
                         generated += 1
+                _set_owner_recursive(body_node, root)
+                created.append(body_node)
+        if created.is_empty() and removed.is_empty():
+                panel.call("set_status", "No MultiMesh instances found.", null)
+                return
+        var ur: Variant = editor_plugin.get_undo_redo() if editor_plugin != null else null
+        if ur != null:
+                _open_scene_undo_action(ur, "UAP: Generate MultiMesh Collision")
+                for b in removed:
+                        ur.add_do_method(self, "_detach_node", b)
+                        ur.add_undo_method(self, "_reattach_node", b, root)
+                        ur.add_undo_reference(b)
+                for b in created:
+                        ur.add_do_method(self, "_reattach_node", b, root)
+                        ur.add_undo_method(self, "_detach_node", b)
+                        ur.add_do_reference(b)
+                ur.commit_action(false)
         if is_instance_valid(panel):
                 panel.call("set_status",
                         ("Generated collision for %d instances." % generated) if generated > 0
                         else "No MultiMesh instances found.", null)
 
 func _mm_paint(world_pos: Vector3) -> void:
-        var root := EditorInterface.get_edited_scene_root(); if root == null: return
+        var root := EditorInterface.get_edited_scene_root()
+        if root == null or not root is Node3D: return
         var place_path := _get_place_path(); if place_path.is_empty(): return
         if not is_instance_valid(_mm_parent):
-                # Reattach to a node already in the live scene before creating a new
-                # one. _mm_parent is only an in-memory reference — it does not
-                # survive a scene reopen or the plugin reloading, but the actual
-                # saved node does. Without this, resuming MultiMesh painting after
-                # reopening the project would create a second "UAP_MultiMeshPaint"
-                # node instead of continuing to use the one already there.
+                # _mm_parent is an in-memory reference that does not survive a
+                # scene reopen; reattach to the saved node so painting continues
+                # instead of creating a duplicate.
                 var existing_parent := root.get_node_or_null("UAP_MultiMeshPaint")
                 if existing_parent != null and existing_parent is Node3D:
                         _mm_parent = existing_parent as Node3D
@@ -1155,9 +1340,6 @@ func _mm_paint(world_pos: Vector3) -> void:
 
         var xform := Transform3D(fb.scaled(scl), pos)
         var mmi   := _mm_get_or_create(place_path, root); if mmi == null: return
-
-        if not _mm_stroke_counts_before.has(place_path):
-                _mm_stroke_counts_before[place_path] = (_mm_transforms.get(place_path, []) as Array).size()
 
         if not _mm_transforms.has(place_path): _mm_transforms[place_path] = []
         (_mm_transforms[place_path] as Array).append(xform)
@@ -1195,20 +1377,12 @@ func _mm_get_or_create(path: String, root: Node) -> MultiMeshInstance3D:
                 mm.mesh = base_mesh; mm.instance_count = 0
                 var expected_name := "UAP_MM_"+path.get_file().get_basename()
                 var par_node := _mm_parent if is_instance_valid(_mm_parent) else root
-                # Same reasoning as the _mm_parent reattachment above: reuse a
-                # matching node already in the live scene rather than creating a
-                # disconnected duplicate alongside it.
                 var existing := par_node.get_node_or_null(expected_name)
                 if existing != null and existing is MultiMeshInstance3D and (existing as MultiMeshInstance3D).multimesh != null and (existing as MultiMeshInstance3D).multimesh.mesh != null:
                         mmi = existing as MultiMeshInstance3D
                         # Rehydrate the in-memory transform list from the existing
                         # multimesh's actual instance data so painting more onto it
-                        # appends rather than silently restarting from empty. (Reading
-                        # instance transforms back out of a MultiMesh's GPU-side buffer
-                        # is unreliable under the dummy rendering driver used for
-                        # headless testing — this path is exercised and structurally
-                        # verified there, but exact transform-value fidelity could only
-                        # be confirmed in a real editor session.)
+                        # appends rather than restarting from empty.
                         if not _mm_transforms.has(path):
                                 var restored: Array = []
                                 for i in mmi.multimesh.instance_count: restored.append(mmi.multimesh.get_instance_transform(i))
@@ -1219,10 +1393,8 @@ func _mm_get_or_create(path: String, root: Node) -> MultiMeshInstance3D:
                         par_node.add_child(mmi, true); _set_owner_recursive(mmi, EditorInterface.get_edited_scene_root())
                 _mm_instances[path] = mmi
 
-        # Sync material override every call (not just at creation) — otherwise
-        # toggling "Enable Override" ON after an asset's MultiMeshInstance3D
-        # already exists would never apply to that asset again, since the old
-        # code only ever checked this once, at first-paint time.
+        # Sync the material override on every call, not just at creation, so
+        # toggling Override ON after the MMI already exists still applies.
         var me := bool(panel.get("material_override_enabled")) if is_instance_valid(panel) else false
         var mp := str(panel.get("material_override_path"))    if is_instance_valid(panel) else ""
         if me and not mp.is_empty() and ResourceLoader.exists(mp):
@@ -1230,9 +1402,8 @@ func _mm_get_or_create(path: String, root: Node) -> MultiMeshInstance3D:
                 if mat != null and mmi.material_override != mat:
                         mmi.material_override = mat
         elif mmi.material_override != null:
-                # Override was turned off (or path cleared/invalidated) after this
-                # MultiMeshInstance3D was created — clear it back to the mesh's own
-                # material rather than leaving a stale override applied forever.
+                # Override turned off (or path cleared) after creation — clear
+                # it instead of leaving a stale override applied forever.
                 mmi.material_override = null
 
         return mmi
@@ -1246,21 +1417,12 @@ func _apply_material_override(node: Node, mat: Material, mode: int = 0) -> void:
                         if count == 0 and mi.mesh != null:
                                 count = mi.mesh.get_surface_count()
                         for i in count:
-                                # ALWAYS duplicate before mutating. Both a pre-existing per-surface
-                                # override (mi.get_surface_override_material) AND the mesh's own
-                                # baked-in material (mi.mesh.surface_get_material) can be a resource
-                                # SHARED across every other instance of this same asset — Godot does
-                                # not duplicate sub-resources on instantiate() unless they are
-                                # explicitly marked "local to scene", which placed assets normally
-                                # are not (this is especially common for imported glTF/GLB models,
-                                # which typically apply their materials via a per-surface override
-                                # slot rather than baking them into the Mesh resource). Mutating a
-                                # shared material's next_pass in place silently re-materializes on
-                                # every other placed copy of that asset, past AND future. Verified
-                                # empirically with a reproduction test, not assumed: the previous
-                                # code only duplicated when reading from mi.mesh.surface_get_material
-                                # and used the pre-existing override directly, unduplicated, when one
-                                # existed — which is the exact common case that was breaking.
+                                # The source material (per-surface override or the mesh's own)
+                                # is typically SHARED across every instance of the asset — Godot
+                                # does not duplicate sub-resources on instantiate() unless marked
+                                # "local to scene" (imported glTF/GLB models usually carry their
+                                # material via the override slot). Duplicate before mutating, or
+                                # the new next_pass re-materializes every other placed copy.
                                 var source: Material = mi.get_surface_override_material(i)
                                 if source == null and mi.mesh != null:
                                         source = mi.mesh.surface_get_material(i)
@@ -1271,12 +1433,10 @@ func _apply_material_override(node: Node, mat: Material, mode: int = 0) -> void:
                 else:
                         # Override mode: per-instance override — safe, does not affect other instances
                         mi.material_override = mat
-                        # Replace means REPLACE — the docs promise "the original material is
-                        # completely gone", so also wipe the per-surface override slots the
-                        # asset brought with it (material_override already supersedes them
-                        # visually). This ALSO removes the material_override + surface-override
-                        # combination that triggers Godot bug #85817 ("Parameter material is
-                        # null" spam) when the placed instance is later deleted.
+                        # Replace means REPLACE — wipe the per-surface override slots the
+                        # asset brought with it. This also removes the
+                        # material_override + surface-override combination that triggers
+                        # godotengine/godot#85817 when the instance is deleted later.
                         var sc := mi.get_surface_override_material_count()
                         for i in sc:
                                 if mi.get_surface_override_material(i) != null:
@@ -1293,13 +1453,13 @@ func _add_collision(node: Node3D, btype: int, stype: int, unpack_scenes: bool) -
                 var sp := node.global_position; var sr := node.global_basis.orthonormalized(); var ss := node.scale
                 par.remove_child(node)
                 var rb := RigidBody3D.new()
-                # Set a provisional name before add_child so Godot has something to work with,
-                # then immediately correct it afterwards — Godot may have uniquified it.
+                # Provisional name before add_child, corrected afterwards — Godot
+                # may uniquify it during add_child.
                 var rb_base := node.name + "_RB"
                 rb.name = rb_base
                 par.add_child(rb)
-                # Enforce our naming convention regardless of what Godot did during add_child.
-                # This guarantees the name ends with "_RB" so _find_placed_root can detect it.
+                # Enforce the _RB naming convention so _find_placed_root can
+                # always detect the wrapper.
                 if not (rb.name as String).ends_with("_RB"):
                         var safe := rb_base
                         var idx2 := 2
@@ -1376,7 +1536,7 @@ func _make_shape(mesh: Mesh, st: int) -> Shape3D:
                 1: return mesh.create_convex_shape(true,true)
                 2: var b := BoxShape3D.new(); b.size   = a.size; return b
                 3: var s := SphereShape3D.new();  s.radius = maxf(a.size.x,maxf(a.size.y,a.size.z))*0.5; return s
-                4: var c := CapsuleShape3D.new(); c.radius = maxf(a.size.x,a.size.z)*0.5; c.height = a.size.y; return c
+                4: var c := CapsuleShape3D.new(); c.radius = maxf(a.size.x,a.size.z)*0.5; c.height = maxf(a.size.y, c.radius * 2.0); return c
         return mesh.create_trimesh_shape()
         
 func _shape_center(mesh: Mesh, st: int) -> Vector3:
@@ -1461,7 +1621,7 @@ func _brush_mask_sample(local_offset: Vector2) -> float:
 func _brush_paint(center: Vector3) -> void:
         if _asset_path.is_empty(): return
         var root := EditorInterface.get_edited_scene_root()
-        if root == null: return
+        if root == null or not root is Node3D: return
         
         var mode := _get_int("place_mode")
         var snap_surf  := (mode == PlaceMode.SURFACE)
@@ -1469,29 +1629,35 @@ func _brush_paint(center: Vector3) -> void:
         var area       := PI * _brush_radius * _brush_radius
         var density    := _get_float("brush_density") if is_instance_valid(panel) else 0.5
         var expected   := area * density
-        # Cap raised from a flat 12 (which saturated probability to ~1.0 for any
-        # reasonably sized brush, making density/radius stop mattering) to 150.
-        # Call frequency is now itself wall-clock throttled (BRUSH_PAINT_INTERVAL_MSEC),
-        # so a higher per-call ceiling no longer risks runaway instance counts —
-        # it now actually lets big/dense brushes look as dense as configured.
+        # Per-dispatch attempt ceiling; call frequency is wall-clock throttled
+        # (BRUSH_PAINT_INTERVAL_MSEC), so big/dense brushes reach their
+        # configured density without runaway instance counts.
         var attempts   := maxi(3, int(expected * 2.5))
         attempts       = mini(attempts, 150)
+        # Stamps scatter in the tangent plane of the surface under the brush
+        # and ray along the surface normal — identical to straight-down XZ
+        # scatter on floors, keeps stamps on the wall for wall surfaces.
+        var plane_n := _surface_normal.normalized() if _surface_normal.length_squared() > 0.5 else Vector3.UP
+        var t1 := plane_n.cross(Vector3.UP)
+        if t1.length_squared() < 0.001: t1 = Vector3.RIGHT
+        t1 = t1.normalized()
+        var t2 := plane_n.cross(t1).normalized()
         for _i in attempts:
                 var angle     := randf() * TAU
                 var radius    := sqrt(randf()) * _brush_radius
                 var local_off := Vector2(cos(angle) * radius, sin(angle) * radius)
                 var prob      := _brush_mask_sample(local_off) * (expected / float(attempts))
                 if randf() > prob: continue
-                var world_pt  := center + Vector3(local_off.x, 0.0, local_off.y)
+                var world_pt  := center + t1 * local_off.x + t2 * local_off.y
                 var hit_pos   := world_pt
-                var hit_norm  := Vector3.UP
+                var hit_norm  := plane_n
                 if snap_surf:
                         var world3d := (root as Node3D).get_world_3d()
                         if world3d != null:
                                 var space := world3d.direct_space_state
                                 if space != null:
-                                        var ray_start := world_pt + Vector3.UP * (_brush_radius + 2.0)
-                                        var ray_end   := world_pt - Vector3.UP * (_brush_radius + 10.0)
+                                        var ray_start := world_pt + plane_n * (_brush_radius + 2.0)
+                                        var ray_end   := world_pt - plane_n * (_brush_radius + 10.0)
                                         var query     := PhysicsRayQueryParameters3D.create(ray_start, ray_end)
                                         query.collide_with_areas = false
                                         

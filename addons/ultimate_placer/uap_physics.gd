@@ -1,24 +1,16 @@
 @tool
 extends Node
 
-## Ultimate Asset Placer — Physics Placer (v2.5.1: engine-driven rewrite)
+## Ultimate Asset Placer — Physics Placer (engine-driven)
 ##
-## Lifts selected scene objects into the air, drops them with REAL engine
-## physics — the project's own 3D physics engine (Jolt Physics, or Godot
-## Physics when Jolt isn't installed) — then bakes the result in place once
-## every object has settled.
+## Lifts selected scene objects into the air, drops them with the project's
+## own 3D physics engine (Jolt Physics, or Godot Physics when Jolt isn't
+## installed), then bakes the result in place once every object settles.
 ##
-## ─── How it works inside the editor ──────────────────────────────────────
-## Godot's editor never steps physics dynamics on its own (verified against
-## a real 4.7.1 build: a RigidBody3D above a floor stays motionless for 170+
-## editor frames, and Engine.get_physics_frames() advances while every space
-## stays frozen — the server itself is inactive during editing). Queries DO
-## work in-editor, which is what previous versions abused to hand-roll a
-## little sim in GDScript — accurate for nothing, slow for everything.
-##
-## The trick this version uses: the editor leaves the 3D physics SERVER
-## inactive, but the server is ours to control. When a simulation starts we:
-##   1. Create a PRIVATE physics space (PhysicsServer3D.space_create()).
+## How it works inside the editor: the editor leaves the 3D physics server
+## inactive, but the server is still ours to control. When a simulation
+## starts we:
+##   1. Create a private physics space (PhysicsServer3D.space_create()).
 ##   2. Build real rigid bodies in it — one per selected object — using the
 ##      object's existing collision shapes (scale-baked mirrors), or shapes
 ##      generated from its meshes when Auto-Add Missing Collision is on.
@@ -26,29 +18,20 @@ extends Node
 ##      other props) into that space as STATIC bodies — including trimesh,
 ##      which is perfectly valid for static replicas.
 ##   4. Freeze the world's space (space_set_active(world, false)) so the
-##      user's own scene physics stays exactly as they left it, re-activate
-##      the physics server (PhysicsServer3D.set_active(true)), and let the
-##      ENGINE step the private space on every physics tick — the same C++
-##      solver, broadphase, contact solver and sleeping system the game
-##      runtime uses, running at engine speed (thousands of bodies is as
-##      cheap here as it is in a running game).
+##      user's scene physics stays untouched, re-activate the physics server
+##      (PhysicsServer3D.set_active(true)), and let the engine step the
+##      private space on every physics tick — the same C++ solver,
+##      broadphase, contact solver and sleeping system the game runtime
+##      uses, at engine speed.
 ##   5. Poll each body's transform once per editor frame and write it back
-##      onto the scene node. When a body falls asleep (the engine's own
-##      sleeping system) it is settled; when every body is settled the
-##      result is baked into an undoable action.
+##      onto the scene node. A body that falls asleep is settled; when every
+##      body is settled the result is baked into an undoable action.
 ## Stopping restores the world space and the server's previous state and
-## frees every RID — nothing is ever left inside the scene file, because
-## nothing scene-side is ever created (zero temporary nodes, zero temporary
-## collision in the saved .tscn, even if the editor crashes mid-run).
-##
-## Why this fixes the old problems:
-##   • Sphere-vs-sphere / hull piles: a real contact solver with momentum
-##     exchange, friction and rolling — not "every other object is a wall".
-##   • Floating on corners/edges: contact manifolds and speculative contacts
-##     handle rest heights exactly (verified: stacked spheres rest at
-##     precisely 2×radius, then sleep).
-##   • Performance: broadphase + narrowphase + solving all happen inside the
-##     engine; GDScript only copies transforms once per frame.
+## frees every RID. Nothing scene-side is ever created, so nothing
+## temporary can leak into the saved .tscn even if the editor crashes
+## mid-run. Contact manifolds and speculative contacts give exact rest
+## heights (no floating on corners), and all broadphase/narrowphase/solver
+## work happens inside the engine — GDScript only copies transforms.
 
 const TEMP_META    := "_uap_temp_physics_body"   # legacy: temp bodies from ≤2.5.0 runs
 const TEMP_NAME    := "__UAP_TempPhysicsCollision__"
@@ -57,7 +40,7 @@ const SETTLE_ANG_SPEED := 0.15   # rad/s angular — same idea for spin
 const SETTLE_HOLD      := 0.25   # seconds under the settle speeds before we call it landed
 const SETTLE_MIN_TIME  := 0.3    # ignore the engine's sleeping flag before this much
                                   # sim time — a fresh body reports SLEEPING=true until
-                                  # the engine integrates it once (Jolt, verified)
+                                  # the engine integrates it once (observed on Jolt)
 const WAKE_SPEED       := 0.08   # m/s — a settled body moving faster than this gets
                                   # resumed instead of staying baked mid-motion
 const ROT_SETTLE_TIME  := 0.18   # seconds to ease the final ground-align tilt
@@ -154,9 +137,9 @@ func start_simulation() -> void:
         _world_space = world3d.get_space()
         _world_was_active = _world_space.get_id() != 0 and PhysicsServer3D.space_is_active(_world_space)
 
-        # Private space: the whole simulation happens in here. Gravity comes from
-        # the space's own default area — the space RID doubles as its handle for
-        # area_set_param (verified on GodotPhysics3D and Jolt in 4.7.1).
+        # Private space: the whole simulation happens in here. Gravity comes
+        # from the space's own default area — the space RID doubles as its
+        # handle for area_set_param on both GodotPhysics3D and Jolt.
         _space = PhysicsServer3D.space_create()
         PhysicsServer3D.space_set_active(_space, true)
         PhysicsServer3D.area_set_param(_space, PhysicsServer3D.AREA_PARAM_GRAVITY_VECTOR, Vector3.DOWN)
@@ -285,9 +268,10 @@ func _step(delta: float) -> void:
                 if lv.length() > MAX_FALL_SPEED:
                         PhysicsServer3D.body_set_state(entry["rid"], PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, lv.limit_length(MAX_FALL_SPEED))
 
-                # Engine says asleep -> truly at rest, nothing left to do. Ignored
-                # for the first moments: a fresh body reports SLEEPING=true until
-                # the engine has integrated it at least once (verified on Jolt).
+                # Engine says asleep -> truly at rest, nothing left to do.
+                # Ignored for the first moments: a fresh body reports
+                # SLEEPING=true until the engine has integrated it at least
+                # once (observed on Jolt).
                 if float(entry["elapsed"]) > SETTLE_MIN_TIME \
                                 and bool(PhysicsServer3D.body_get_state(entry["rid"], PhysicsServer3D.BODY_STATE_SLEEPING)):
                         _mark_settled(entry, node, align_ground)
@@ -405,7 +389,7 @@ func _finish(keep: bool) -> void:
         # private body and the space itself, and only then unfreeze the scene's
         # own space. Restoring the world space any earlier lets the engine step
         # it while our private bodies still exist, and freeing bodies after that
-        # crashes inside Jolt (signal 11, reproduced and pinned down here).
+        # crashes inside Jolt.
         # Deactivate the server FIRST so nothing moves while we restore nodes.
         PhysicsServer3D.set_active(false)
 
@@ -455,11 +439,10 @@ func _release_body(entry: Dictionary) -> void:
 
 func _release_rid(rid: RID) -> void:
         ## Frees a body RID safely: DETACH it from its space first. Freeing a body
-        ## that is still registered in a space — and especially one currently in
-        ## active contact with other bodies — crashes inside the Jolt module
-        ## (verified: signal 11 in 4.7.1 when stopping a simulation whose balls
-        ## were resting on the mirrored floor). Detaching drops it out of every
-        ## contact island, after which freeing is trivially safe.
+        ## that is still registered in a space — and especially one currently
+        ## in active contact with other bodies — crashes inside the Jolt
+        ## module. Detaching drops it out of every contact island, after
+        ## which freeing is safe.
         if rid.get_id() == 0:
                 return
         if PhysicsServer3D.body_get_space(rid).get_id() != 0:
@@ -484,10 +467,9 @@ func _teardown_space() -> void:
 func _make_body_entry(node: Node3D) -> Variant:
         if not is_instance_valid(node): return null
 
-        # Clean up any leftover temp collision from a pre-2.5.1 run on this same
-        # node (e.g. the editor crashed mid-simulation on the old version) before
-        # measuring anything. The engine-driven version creates no scene nodes at
-        # all — this only ever finds leftovers from older plugin versions.
+        # Clean up any leftover temporary collision from an older plugin
+        # version before measuring anything (the engine-driven approach
+        # creates no scene nodes at all).
         for c in node.get_children():
                 if c is Node and (c as Node).has_meta(TEMP_META):
                         node.remove_child(c); (c as Node).free()
@@ -545,10 +527,9 @@ func _make_body_entry(node: Node3D) -> Variant:
                 PhysicsServer3D.body_add_shape(rid, (s["shape"] as Shape3D).get_rid(), s["xform"])
         PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(body_basis, body_origin))
         PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_CAN_SLEEP, true)
-        # A brand-new body reports SLEEPING=true until the engine integrates it for
-        # the first time (verified on Jolt 4.7.1). Wake it explicitly so the very
-        # first settle check can't freeze the object before it ever moved — and
-        # so settle logic never mutates a body the engine hasn't stepped yet.
+        # A brand-new body reports SLEEPING=true until the engine integrates
+        # it for the first time (observed on Jolt). Wake it explicitly so the
+        # first settle check cannot freeze the object before it ever moved.
         PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_SLEEPING, false)
         PhysicsServer3D.body_set_collision_layer(rid, 1)
         PhysicsServer3D.body_set_collision_mask(rid, 1)

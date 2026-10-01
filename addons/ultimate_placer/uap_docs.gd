@@ -614,7 +614,7 @@ A: This was a bug in earlier versions. Splines are named AdvancedSpline, Advance
 A: This was a bug in v1.4 when using [b]RigidBody3D[/b] auto-collision. Fixed in v1.5: undoing now correctly removes the RigidBody3D wrapper (along with the mesh and collision shapes inside it) as well as any sibling collision bodies for StaticBody3D / Area3D modes. If you have leftover collision nodes from a previous session, delete them manually — they will be named [YourAsset]_RB or [YourAsset]_Collision in the scene tree.
 
 [color=#f0b834][b]Q: Scene thumbnails are not showing / showing the wrong scene.[/b][/color]
-A: UAP generates scene thumbnails automatically when you switch away from or close a scene. [b]Open each scene at least once[/b], look at it in the 3D viewport, then switch to another scene. UAP captures a screenshot of the viewport at that moment and saves it permanently. If old wrong thumbnails are cached, delete the folder [b]user://uap_thumbnails/[/b] (found via Project → Open User Data Folder) and reopen your scenes.
+A: Every card thumbnail is produced by UAP's built-in studio renderer and cached on disk, including scenes (.tscn/.scn). If a thumbnail looks wrong or stale, delete the folder [b]user://uap_thumbnails/[/b] (found via Project → Open User Data Folder); it is rebuilt automatically as you browse.
 
 [color=#f0b834][b]Q: I get a Trimesh warning in the Collision page.[/b][/color]
 A: Trimesh cannot be used with RigidBody3D or CharacterBody3D. Switch the Shape Type to Convex Hull, Box, Sphere, or Capsule.

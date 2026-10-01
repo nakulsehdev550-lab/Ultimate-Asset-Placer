@@ -1,14 +1,12 @@
 @tool
 extends Node
 
-## UAP Offline Scene Thumbnail Generator — v3 (RECTANGULAR STUDIO)
+## UAP Offline Thumbnail Generator (rectangular studio)
 ##
 ## Every asset thumbnail is rendered by this plugin's own isolated SubViewport
-## "studio". EditorResourcePreview is NO LONGER used for the asset browser:
-## the editor's previews are small SQUARE images that pillarboxed with ugly
-## side bars inside the card's rectangular thumbnail well and turned blurry
-## the moment the preview-size slider went up. Self-rendering fixes all of
-## that in one move:
+## "studio" at the card well's exact aspect ratio and resolution — editor
+## previews are small square images that pillarbox and blur inside the
+## rectangular wells.
 ##
 ##   • The SubViewport is sized at the EXACT aspect ratio of the card's
 ##     thumbnail well (the panel pushes the well's pixel size in via
@@ -39,20 +37,16 @@ const RES_TIERS: Array[int] = [64, 96, 128, 192, 256, 320]
 const SETTLE_FRAMES   := 5
 const SETTLE_FRAMES_2D := 3     # 2D settles faster
 const MAX_WAIT_FRAMES := 120
-# v3 cache directory — keyed PER RENDER SIZE ("{md5}_{w}x{h}.png"). This is a
-# NEW directory on purpose: the old assets/ folder holds SQUARE letterboxed
-# PNGs from the v2 generator, and reusing them would put the black bars right
-# back. The legacy folder is emptied on startup (best effort).
-# NOTE: this MUST be a different directory than plugin.gd's THUMB_CACHE_DIR
-# (scenes/). plugin.gd caches "live viewport screenshots" of currently-open
-# scenes; this file caches "isolated studio-lit previews" of placeable
-# assets. A .tscn file can be BOTH a placeable asset and a scene you open
-# directly to edit — if the two systems shared a cache directory keyed by the
-# same md5(path), whichever one wrote last would silently clobber the other's
-# PNG with the wrong image.
+# Cache directory keyed PER RENDER SIZE ("{md5}_{w}x{h}.png"), separate from
+# any other thumbnail store: a .tscn file can be both a placeable asset and a
+# scene you open to edit, and sharing one md5(path)-keyed directory between
+# systems would silently clobber the other's PNG.
 const DISK_CACHE_DIR     := "user://uap_thumbnails/assets_r3/"
+## Soft cap on cached thumbnails across all size tiers; oldest files are
+## pruned first once the count exceeds this.
+const DISK_CACHE_MAX_FILES := 4000
 const LEGACY_CACHE_DIRS: Array[String] = [
-        "user://uap_thumbnails/assets/",   # v2 square letterboxed cache
+        "user://uap_thumbnails/assets/",   # pre-aspect-ratio square cache
 ]
 const BG_COLOR        := Color(0.15, 0.16, 0.21, 1.0)
 const BG_COLOR_2D     := Color(0.20, 0.22, 0.28, 1.0)
@@ -75,6 +69,7 @@ var _render_size := Vector2i(256, 200)
 
 # ── 3D Queue state ────────────────────────────────────────────────────────────
 var _queue:     Array  = []
+var _queue_set: Dictionary = {}   # path -> true; O(1) duplicate checks
 var _cur_path:  String = ""
 var _cur_inst:  Node   = null
 var _frame:     int    = 0
@@ -82,6 +77,7 @@ var _active:    bool   = false
 
 # ── 2D Queue state ────────────────────────────────────────────────────────────
 var _queue_2d:      Array  = []
+var _queue_2d_set:  Dictionary = {}
 var _cur_path_2d:   String = ""
 var _cur_inst_2d:   Node   = null
 var _frame_2d:      int    = 0
@@ -98,8 +94,8 @@ func _ensure_cache_dir() -> void:
         DirAccess.make_dir_recursive_absolute(DISK_CACHE_DIR)
 
 func _purge_legacy_caches() -> void:
-        ## Best-effort cleanup: delete the v2 SQUARE cache files so they stop
-        ## wasting disk space. Silent — a locked file must never break startup.
+        ## Best-effort cleanup of legacy cache layouts. Silent — a locked
+        ## file must never break startup.
         for d in LEGACY_CACHE_DIRS:
                 var da := DirAccess.open(d)
                 if da == null: continue
@@ -181,22 +177,24 @@ func _build_viewport_2d() -> void:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 func enqueue(path: String) -> void:
-        if path == _cur_path or path in _queue: return
+        if path == _cur_path or _queue_set.has(path): return
+        _queue_set[path] = true
         _queue.append(path)
         if not _active: call_deferred("_next")
 
 func enqueue_2d(path: String) -> void:
         ## Enqueue a 2D / Control scene for offline rendering.
         ## Also used internally: the 3D queue routes Node2D/Control roots here.
-        if path == _cur_path_2d or path in _queue_2d: return
+        if path == _cur_path_2d or _queue_2d_set.has(path): return
+        _queue_2d_set[path] = true
         _queue_2d.append(path)
         if not _active_2d: call_deferred("_next_2d")
 
 func clear_queue() -> void:
-        _queue.clear()
+        _queue.clear(); _queue_set.clear()
         _active = false; _cur_path = ""
         _evict()
-        _queue_2d.clear()
+        _queue_2d.clear(); _queue_2d_set.clear()
         _active_2d = false; _cur_path_2d = ""
         _evict_2d()
 
@@ -275,9 +273,8 @@ func _next() -> void:
         # deferred _next() calls can fire back-to-back. Without this guard the
         # second call saw an empty queue and reset _active/_cur_path to idle
         # WHILE the first call's render was awaiting its settle frame, which
-        # made that render's defensive re-check abort silently — its asset
-        # stayed in the panel's pending map forever and never re-rendered
-        # (observed as a card whose thumbnail never appeared at a new size).
+        # made that render's defensive re-check abort silently and the asset
+        # never re-rendered.
         if _active: return
         if _queue.is_empty():
                 _active = false; _cur_path = ""
@@ -287,6 +284,7 @@ func _next() -> void:
 
         _active   = true
         _cur_path = _queue.pop_front() as String
+        _queue_set.erase(_cur_path)
         _frame    = 0
         _evict()
 
@@ -298,10 +296,7 @@ func _next() -> void:
                 thumbnail_ready.emit(done, cached)
                 call_deferred("_next"); return
 
-        # Straight to the offline studio render. (v2 tried EditorResourcePreview
-        # here first — its small SQUARE previews were exactly what the user
-        # rejected: pillarboxed bars in the rectangular wells and blurry upscale
-        # on big cards. Everything now gets the consistent studio treatment.)
+        # Straight to the offline studio render.
         _vp_render_path(_cur_path)
 
 func _vp_render_path(path: String) -> void:
@@ -314,9 +309,8 @@ func _vp_render_path(path: String) -> void:
         # sufficient safety net.
 
         # Load WITHOUT a type hint: the file may be a PackedScene (.tscn/.glb/
-        # .fbx/...) OR a bare Mesh resource (.obj imports as Mesh by default in
-        # Godot 4 — those were previously invisible to the offline renderer and
-        # had to fall back to the editor's small square previews).
+        # .fbx/...) OR a bare Mesh resource (.obj imports as Mesh by default
+        # in Godot 4).
         var res: Resource = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_REUSE)
         if res == null:
                 _skip_current(); return
@@ -365,16 +359,32 @@ func _skip_current() -> void:
         thumbnail_ready.emit(done, null)   # null → panel marks permanent fail
         call_deferred("_next")
 
+## Keeps the disk cache bounded: 6 size tiers x every asset can otherwise grow
+## unbounded. Oldest files go first. Runs once per render (cheap dir listing).
+func _prune_disk_cache() -> void:
+        var da := DirAccess.open(DISK_CACHE_DIR)
+        if da == null: return
+        var files: Array[String] = []
+        da.list_dir_begin()
+        var f := da.get_next()
+        while f != "":
+                if f.ends_with(".png"): files.append(f)
+                f = da.get_next()
+        da.list_dir_end()
+        if files.size() <= DISK_CACHE_MAX_FILES: return
+        files.sort_custom(func(a, b):
+                return FileAccess.get_modified_time(DISK_CACHE_DIR + a) < FileAccess.get_modified_time(DISK_CACHE_DIR + b))
+        for i in (files.size() - DISK_CACHE_MAX_FILES):
+                DirAccess.remove_absolute(DISK_CACHE_DIR + files[i])
+
 func _evict() -> void:
+        _prune_disk_cache()
         if is_instance_valid(_cur_inst):
                 if is_instance_valid(_vp) and _cur_inst.get_parent() == _vp:
                         _vp.remove_child(_cur_inst)
-                # Godot bug #85817 hardening: assets routinely reference SHARED
-                # materials via override slots (material_override + per-surface
-                # overrides). Deleting such an instance makes the renderer's
-                # deferred update process the now-dangling RIDs and spam
-                # "Parameter material is null" four times per instance. Wipe
-                # the override slots while the instance is still alive.
+                # godotengine/godot#85817: wipe override slots while the
+                # instance is alive so the renderer never processes dangling
+                # shared-material RIDs after the free.
                 _clear_override_slots(_cur_inst)
                 _cur_inst.queue_free()
                 _cur_inst = null
@@ -392,6 +402,7 @@ func _next_2d() -> void:
 
         _active_2d   = true
         _cur_path_2d = _queue_2d.pop_front() as String
+        _queue_2d_set.erase(_cur_path_2d)
         _frame_2d    = 0
         _evict_2d()
 
@@ -454,10 +465,7 @@ func _process(_dt: float) -> void:
                                                 if img != null and not img.is_empty():
                                                         _vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
                                                         # The viewport is ALREADY at the card well's exact
-                                                        # aspect ratio and resolution — save as-is. (v2
-                                                        # smart-cropped pixel-by-pixel and letterboxed the
-                                                        # result onto a square transparent canvas, which is
-                                                        # where every black bar came from.)
+                                                        # aspect ratio and resolution — save as-is.
                                                         img.save_png(cache_path_for(_cur_path))
                                                         var tex  := ImageTexture.create_from_image(img)
                                                         var done := _cur_path
@@ -494,7 +502,7 @@ func _evict_2d() -> void:
         if is_instance_valid(_cur_inst_2d):
                 if is_instance_valid(_vp2d) and _cur_inst_2d.get_parent() == _vp2d:
                         _vp2d.remove_child(_cur_inst_2d)
-                # Same Godot bug #85817 hardening as _evict().
+                # Same shared-material rationale as _evict().
                 _clear_override_slots(_cur_inst_2d)
                 _cur_inst_2d.queue_free()
                 _cur_inst_2d = null
@@ -502,7 +510,7 @@ func _evict_2d() -> void:
                 _vp2d.render_target_update_mode = SubViewport.UPDATE_DISABLED
 
 ## Wipes material_override / material_overlay / every per-surface override on
-## a node tree. See _evict() for the Godot bug #85817 rationale.
+## a node tree. See _evict() for the rationale (godotengine/godot#85817).
 func _clear_override_slots(node: Node) -> void:
         if node is MeshInstance3D:
                 var mi := node as MeshInstance3D
@@ -662,11 +670,10 @@ func _collect_aabb(node: Node, pxf: Transform3D) -> AABB:
 
         # CSG shapes, Sprite3D/AnimatedSprite3D, Label3D, decals, particles, and any
         # other VisualInstance3D — all of these expose a real get_aabb() that Godot
-        # computes from their actual generated geometry. Verified empirically: one
-        # process_frame after entering the tree (which is exactly when _fit_camera
-        # runs) is enough for CSG shapes to report their true, correct bounds — so
-        # we use the real box instead of a guessed proxy, and only fall back to a
-        # proxy if the engine genuinely has nothing yet (size still zero).
+        # computes from their actual generated geometry. One process_frame
+        # after entering the tree (exactly when _fit_camera runs) is enough
+        # for CSG shapes to report their true bounds, so use the real box and
+        # only fall back to a proxy if the engine has nothing yet (zero size).
         elif node is VisualInstance3D:
                 var vis := node as VisualInstance3D
                 var real_aabb := vis.get_aabb()

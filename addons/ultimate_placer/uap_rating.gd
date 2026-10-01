@@ -1,10 +1,10 @@
 extends Control
 
-## Ultimate Asset Placer — Rating Stars (2.5)
+## Ultimate Asset Placer — Rating Stars
 ##
-## Five golden stars with crisp black borders pinned to the RIGHT CORNER of
-## the header title row in the asset browser (2.5 rev 6) — between the
-## flexible spacer and the collapse chevron, exactly where the version label
+## Five golden stars with crisp black borders pinned to the right corner of
+## the header title row in the asset browser — between the flexible spacer
+## and the collapse chevron.
 ## used to sit. They are NOT part of the group/filter chip strip: they never
 ## wrap with the group buttons and they never move when the collapse toggles.
 ## The chip strip (a FlowContainer) comes and goes around them — in the

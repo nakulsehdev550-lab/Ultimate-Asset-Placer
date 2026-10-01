@@ -36,13 +36,10 @@ static func get_icon_dir() -> String:
 ## e.g. UAPIcons.get_icon("action_add")). Returns null if missing, and never
 ## throws, so a missing icon degrades to "no icon" rather than a load error.
 ##
-## NOTE: only successful loads are cached. On a brand new install, Godot may
-## still be importing the freshly-added icon .svg files when this plugin
-## first initializes (a real race — verified via testing a genuinely fresh
-## project import, not assumed). If we cached a failed lookup permanently,
-## the icon would stay missing forever even after Godot finished importing
-## it moments later. Leaving failures uncached means the next call (e.g. via
-## refresh_icons() below, or simply reopening a tab) tries again for free.
+## NOTE: only successful loads are cached. On a brand-new install Godot may
+## still be importing the icon .svg files when the plugin first initializes;
+## caching a failed lookup would keep the icon missing even after the import
+## finished. Leaving failures uncached means the next call retries for free.
 static func get_icon(icon_name: String) -> Texture2D:
 	if _cache.has(icon_name):
 		return _cache[icon_name]
@@ -73,16 +70,10 @@ static func set_button_icon(btn: Button, icon_name: String) -> void:
 ## (icon_name, size) pair.
 ##
 ## Use this instead of Button.expand_icon when a button needs to be smaller
-## than the icon's native 24x24 design size. expand_icon is meant for
-## growing a small icon to fill a larger button and is the right tool for
-## that; asked to do the opposite — shrink a 24x24 icon into an 18x18 or
-## smaller button — it was found, via an actual rendered screenshot inside
-## the real editor (not just a headless size/rect check, which had already
-## passed and gave no hint anything was wrong), to sometimes render the
-## icon at only a few pixels rather than the computed fit size, collapsing
-## a star into an unrecognizable blob. Pre-resizing the actual texture data
-## once here sidesteps that at-a-distance layout computation entirely — the
-## icon IS the target size, nothing needs to "fit" it into anything.
+## than the icon's native 24x24 design size: expand_icon shrinks unreliably
+## and can render the icon at a few pixels instead of the computed fit size.
+## Pre-resizing the texture data once here makes the icon exactly the target
+## size — nothing needs to "fit" it into anything.
 static func get_icon_sized(icon_name: String, size: int) -> Texture2D:
 	var key := "%s@%d" % [icon_name, size]
 	if _cache.has(key):
@@ -109,23 +100,17 @@ static func set_button_icon_sized(btn: Button, icon_name: String, size: int) -> 
 ## per (icon_name, size).
 ##
 ## Small icons overlaid on asset thumbnails have no reliable background —
-## real thumbnails range from near-black to near-white, and a flat-color
-## icon (tinted via icon_normal_color, which only multiplies the existing
-## pixel colors) has good contrast against some and none at all against
-## others; confirmed directly against a real near-white test thumbnail.
-## Baking a dark, mostly-opaque outline into the texture itself guarantees
-## a visible edge regardless of what's underneath, without needing a
-## separate solid backing shape behind it. It also means every tint stays
-## correct automatically: outline pixels are near-black, and multiplying
-## near-black by any tint color (white, gold, whatever a future state
-## needs) stays near-black, so the same one texture works for every
-## favorited/hover/pressed state without regenerating it per color.
+## thumbnails range from near-black to near-white, and a flat tinted icon
+## has no guaranteed contrast. Baking a dark, mostly-opaque outline into
+## the texture guarantees a visible edge regardless of what's underneath.
+## It also keeps every tint correct automatically: multiplying near-black
+## outline pixels by any tint stays near-black, so one texture works for
+## every favorited/hover/pressed state.
 ##
 ## Works by dilating the icon's alpha mask outward by outline_px at a
-## higher working resolution (smoother edges than dilating the small final
-## size directly, confirmed by comparing both directly), then downsampling
-## to the requested size: any pixel within outline_px of an opaque source
-## pixel, but not itself opaque, becomes part of the outline layer.
+## higher working resolution (smoother edges than dilating the final size
+## directly), then downsampling: any pixel within outline_px of an opaque
+## source pixel, but not itself opaque, becomes part of the outline layer.
 static func get_icon_outlined(icon_name: String, size: int, outline_color: Color = Color(0.05, 0.05, 0.07, 0.95), outline_px: int = 2) -> Texture2D:
 	var key := "outline:%s@%d" % [icon_name, size]
 	if _cache.has(key):
@@ -206,11 +191,8 @@ static func set_texture_rect(tr: TextureRect, icon_name: String, tint: Variant =
 static func bbcode_img(icon_name: String, size: int = 15) -> String:
 	return "[img=%dx%d]%s%s.svg[/img]" % [size, size, get_icon_dir(), icon_name]
 
-## Single source of truth for the plugin's version number, read directly
-## from plugin.cfg every time (cheap — ConfigFile parsing a tiny file) so it
-## can never drift out of sync in any of the several places it's displayed
-## (the browser header, the manual's title banner and footer, the startup
-## log line) the way "1.5.0" was found hardcoded in more than one of them.
+## Single source of truth for the plugin's version number, read from
+## plugin.cfg every time so every displayed version stays in sync.
 static func get_plugin_version() -> String:
 	var cfg := ConfigFile.new()
 	if cfg.load(get_addon_root() + "plugin.cfg") == OK:

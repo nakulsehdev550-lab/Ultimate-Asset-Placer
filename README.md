@@ -2,7 +2,7 @@
 
 **Professional 3D asset placement tool for Godot 4.7+** — place, paint, scatter, spline, and physics-drop your assets with a fast, tactile editor UI. Optimised for thousands of assets.
 
-![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.5.1-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.5.2-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ![Ultimate Asset Placer in the Godot editor](screenshots/editor_overview.png)
 
@@ -19,6 +19,36 @@
 - **Material override & auto collision** — Replace/Next-Pass materials, Static/Rigid/Character/Area bodies with five shape types.
 - **Physics tab** — lift, drop, tumble and settle existing scene objects inside the editor using your project's own physics engine (Jolt or Godot Physics).
 - **Asset Zoo** — lays out your whole library in a 3D grid for inspection.
+
+## What's new in v2.5.2 — deep polish release
+
+A full audit-and-repair pass across every feature: **35+ fixes** covering undo
+reliability, transform correctness, editor performance and crash hardening —
+no new features to relearn, everything just works the way it should have.
+
+- **Undo that always works.** Paint strokes (brush and drag-painting) now
+  commit as a single undo step, repeated undo/redo of placements can never
+  fail, MultiMesh paint strokes snapshot their transforms, and generated
+  MultiMesh collision, Clear, and spline bakes are all undoable.
+- **Correct transforms everywhere.** Spline bakes (to nodes and to MultiMesh)
+  keep their exact world placement on any transformed path, baked MultiMesh
+  collision wraps the real instance positions, and capsule collision can no
+  longer be built degenerate.
+- **Smoother editor.** Per-keystroke browser rebuilds and wheel-burst
+  rebuilds are debounced, config writes are throttled and atomic (a crash
+  can no longer wipe your groups and favorites), the spline tool rebuilds
+  only the layers you edit and throttles curve-drag rebuilds, thumbnails
+  stop rendering when the browser is closed, and the physics status line
+  updates only when its text changes.
+- **Deterministic splines.** Random Yaw layouts are seeded per layer, so
+  your saved scatter looks the same after every reload.
+- **Crash & error hardening.** Corrupt/failed imports no longer break "View
+  Model" or spline meshes, 2D scenes can no longer leak nodes per click,
+  stuck keys after alt-tab are cleared, the vertex-mode screen test is
+  budgeted, and "Mesh Vertex Snap" now genuinely snaps to real mesh
+  vertices (sampled and deduped per mesh).
+
+![Deep polish release](screenshots/asset_cards.png)
 
 ## What's new in v2.5.1 — the Physics tab now runs your project's own physics engine
 

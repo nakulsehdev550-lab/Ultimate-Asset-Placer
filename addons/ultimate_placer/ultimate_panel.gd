@@ -20,9 +20,8 @@ const C_DIM       := Color(0.50, 0.52, 0.60)
 const C_HEAD      := Color(0.88, 0.93, 1.00)
 const C_TEXT      := Color(0.80, 0.83, 0.90)
 const C_PLACING   := Color(1.00, 0.84, 0.22)
-# 2.4: resting card face = INSET dark — the same value as S_INSET_BG used by
-# the group chips/rows, so cards read as carved into the panel instead of
-# blending into it (previous lighter fill was "too similar to the background").
+# Resting card face: same value as S_INSET_BG so cards read as carved into
+# the panel, matching the group chips/rows.
 const C_CARD_BG   := Color(0.078, 0.085, 0.115)
 const C_CARD_BD   := Color(0.22, 0.24, 0.32)
 const C_SEL_BD    := Color(0.28, 0.62, 1.00)
@@ -194,13 +193,13 @@ var place_mode:int=1; var scroll_mode:int=0
 var grid_enabled:bool=true; var grid_size:float=1.0
 var grid_height:float=0.0; var height_offset:float=0.0
 var height_snap:bool=false; var show_grid:bool=true
-# 2.5 rev 8 — infinite-grid follow: the floor's half-extent is configurable
-# ("View Dist", used to be hardwired at 40 m) and every plane can re-center
-# on the viewport camera as you navigate (lines stay locked onto world grid
-# multiples, so the grid never slides — it just extends wherever you go).
+# Infinite-grid follow: the floor's half-extent ("View Dist") is configurable
+# and every plane can re-center on the viewport camera as you navigate (lines
+# stay locked onto world grid multiples, so the grid never slides — it just
+# extends wherever you go).
 var grid_view_dist:float=40.0
 var grid_follow:bool=true
-# 2.5 rev 7 — axis wall grids: vertical snap planes toggled individually.
+# Axis wall grids: vertical snap planes toggled individually.
 #   X grid = XY plane at z = x_grid_pos (snaps X + Y, orange lines)
 #   Z grid = ZY plane at x = z_grid_pos (snaps Z + Y, green lines)
 # Size (View Dist) = half-extent in metres, pos = offset along the
@@ -247,27 +246,36 @@ var shortcuts:Dictionary={
         "flip_x":KEY_G,"flip_z":KEY_B,"reset_rot":KEY_T,
 }
 var _preview_size:int=88; var _all_paths:Array=[]; var _groups:Array=[]
-var _grid_rm:int=0   # 0 since rev 4: the favorite star sits FULLY INSIDE the
-                     # card (pinned to the thumbnail's top-right corner), so
-                     # nothing overhangs the grid anymore. Kept in the column
-                     # math so a future reservation needs no re-derivation.
 var _favorite_paths:Array=[]  ## Favorites' actual storage — a separate list, NOT a _groups entry
 var _active_group:int=-1; var _is_placing:bool=false
 var items_per_page:int=1000; var current_page:int=0
 var _visible_paths_filtered:Array=[]
 var _thumb_cache:Dictionary={}; var _thumb_lru:Array=[]
-var _thumb_pending:Dictionary={}; var _thumb_heavy_count:int=0
+var _thumb_pending:Dictionary={}
 var _thumb_perm_failed:Dictionary={}; var _card_ir_map:Dictionary={}
 var _card_fav_btn_map:Dictionary={}
-var _ir_path_map:Dictionary={}; var _thumb_retry_queue:Array=[]
+var _thumb_retry_queue:Array=[]
 var _thumb_retry_timer:float=0.0; var _thumb_check_timer:float=0.0
 var _scan_dir_queue:Array=[]; var _is_scanning:bool=false
 var _build_queue:Array=[]; var _visible_paths_ordered:Array=[]
 var _multi_selected:Array=[]; var _last_clicked_path:String=""
 var _selected_path_ui:String=""; var _card_map:Dictionary={}
 var _browser_generation:int=0  # Increments on each rebuild; prevents stale thumbnail callbacks
-var _hidden_paths:Array=[]  ## Assets removed from the browser list via right-click. Persisted; reversible.
-var _show_hidden:bool=false  ## 2.5 rev 8.1 — session-only browser "Show Hidden" toggle. ON → removed (hidden) assets reappear in EVERY view as dimmed cards. Never persisted: a refresh/reopen always starts with them hidden again.
+var _hidden_set:Dictionary={}  ## Assets removed from the browser list via right-click (path -> true). Persisted; reversible.
+var _show_hidden:bool=false  ## Session-only browser "Show Hidden" toggle. ON → removed (hidden) assets reappear in EVERY view as dimmed cards. Never persisted: a refresh/reopen always starts with them hidden again.
+
+## Config writes are debounced and atomic: slider drags call _save_config()
+## dozens of times per second, and a truncated cfg file used to wipe every
+## group/favorite/hidden entry on the next launch.
+const CONFIG_SAVE_MIN_INTERVAL_MS := 1500
+var _cfg_save_pending := false
+var _cfg_last_save_ms := 0
+var _extra_paths_staged: Array = []   # extras loaded from cfg; merged after each scan
+
+## Debounce buffers for the two high-frequency rebuild triggers.
+var _search_debounce := 0.0
+var _search_pending_text := ""
+var _preview_debounce := 0.0
 
 # ─── UI Overhaul 2.1: Left tab rail + Docs window + 3D tactile styles ────────
 var _tab_rail:VBoxContainer=null          # Blender-style vertical icon bar
@@ -277,7 +285,6 @@ var _docs_window:Window=null              # centered documentation window
 var _docs_rtl:RichTextLabel=null          # chapter content renderer
 var _docs_chapter_btns:Array=[]
 var _docs_cur_chapter:int=0
-var _docs_was_open:bool=false             # rail highlight state helper
 
 # Tab rail icon names, index-aligned with the feature tabs built below
 # (Place, Transform, Paint, Spline, Material, Groups, Keys, Collision, Physics).
@@ -299,17 +306,15 @@ const S_INSET_ACTIVE_BG    := Color(0.085,0.190,0.310)
 const S_INSET_ACTIVE_EDGE  := Color(0.030,0.068,0.115)
 const S_SECTION_BG   := Color(0.098,0.105,0.138)
 const S_SECTION_LINE := Color(0.024,0.027,0.038)
-# 2.3 card states: the thumbnail WELL is tinted to match the card's active
-# state, so the blue/amber 3D selection reads around the thumbnail too
-# instead of only on the name row at the bottom.
+# The thumbnail WELL is tinted to match the card's active state, so the
+# blue/amber selection reads around the thumbnail, not just the card face.
 const C_WELL_BG      := Color(0.055,0.060,0.082)   # resting: deepest inset layer (darker than the card face)
 const C_WELL_SEL     := Color(0.125,0.235,0.360)   # single-select: blue-tinted
 const C_WELL_MULTI   := Color(0.330,0.245,0.090)   # multi-select: amber-tinted
-# 2.5 rev 3: ONLY standalone panel-level action buttons are raised (Start
-# Physics row, Create New Spline, Exit Spline Mode, Reset All to Defaults and
-# the Groups-tab action cluster). Buttons INSIDE a group section keep the
-# quiet idle look. One face color per meaning — all deliberately dark,
-# on-theme, and clearly distinct from the panel bg.
+# Only standalone panel-level action buttons are raised (Start Physics row,
+# Create New Spline, Exit Spline Mode, Reset All to Defaults and the
+# Groups-tab action cluster). Buttons INSIDE a group section keep the quiet
+# idle look. One face color per meaning.
 const C_BTN_ACTION  := Color(0.16,0.34,0.55)   # steel blue — standalone panel actions
 const C_BTN_DANGER  := Color(0.45,0.16,0.16)   # dark red     — destructive standalone actions
 const C_BTN_STOP    := Color(0.48,0.34,0.08)   # dark amber   — stop/hold actions
@@ -340,7 +345,7 @@ var _multisel_group_opt:OptionButton=null
 # 2.2: tab-name header + instant rail hover-name
 var _tab_header_lbl:Label=null
 var _tab_help_btn:Button=null
-# 2.3: global dressing-pass counters (reported once at startup).
+# Global dressing-pass counters (read by the test harness).
 var _theme_n_b:int=0; var _theme_n_o:int=0; var _theme_n_l:int=0
 var _rail_tip_layer:Control=null; var _rail_tip_panel:PanelContainer=null; var _rail_tip_lbl:Label=null
 # 2.2: advanced header collapse — when collapsed, the group chip strip moves
@@ -351,14 +356,13 @@ var _header_title_row:HBoxContainer=null; var _header_title_lbl:Label=null
 # collapse remains, and it keeps the group chips visible on the bar.
 var _header_collapsed:bool=false
 var _header_master_btn:Button=null; var _header_ver_lbl:Label=null
-# 2.5 rev 6: header layout — version label sits NEXT to the title text, and a
-# flexible spacer pushes the rating stars + collapse chevron to the RIGHT
-# CORNER. The stars are pinned there permanently (they are NOT part of the
-# group chip strip, so they never wrap or move with the group buttons).
+# Header layout: version label next to the title text, and a flexible spacer
+# pushes the rating stars + collapse chevron to the right corner. The stars
+# are pinned there permanently — they are not part of the group chip strip.
 var _header_spacer:Control=null; var _rating_stars:Control=null
-# 2.5 rev 7 — retractable rating stars. The arrow button tucks the stars away
-# or reveals them again; the hidden state is SESSION-ONLY on purpose: opening
-# (or expanding) the asset browser always shows the stars by default.
+# Retractable rating stars: the arrow button tucks the stars away or reveals
+# them again. Hidden state is session-only — opening (or expanding) the
+# browser always shows the stars by default.
 var _header_stars_btn:Button=null
 var _stars_hidden:bool=false
 var _status_bar_panel:PanelContainer=null
@@ -376,8 +380,7 @@ var _format_btns:Array=[]; var _vss_spin:SliderSpin=null; var _page_lbl:Label=nu
 var _zoo_show_labels:bool=true; var _zoo_paths_to_measure:Array=[]
 var _zoo_source:int=0; var _zoo_source_opt:OptionButton=null # 0=All, 1=Group filter, 2=Selected
 var _zoo_items:Array=[]; var _zoo_node:Node3D=null
-var _zoo_x_off:Array=[]; var _zoo_z_off:Array=[]
-var _zoo_cols:int=1; var _zoo_index:int=0; var _zoo_is_building:bool=false
+var _zoo_index:int=0; var _zoo_is_building:bool=false
 const ZOO_BATCH:=3; const ZOO_MEASURE_BATCH:=2
 var _capturing_action:String=""; var _key_capture_btns:Dictionary={}
 
@@ -435,10 +438,8 @@ func refresh_icons() -> void:
                 if dtex != null: _rail_docs_btn.icon = dtex
         # Card favorite stars suffer from the same first-import race as the tab
         # icons (they are built once with the grid), so re-apply them here too.
-        # 2.5: same EXACT size formula as _add_card (the old 18px refresh size
-        # drifted from the 16px build size) — with ignore_texture_size any
-        # drift would only scale, never shift the layout, but staying equal
-        # keeps the star crisp at 1:1 pixels.
+        # Same size formula as _add_card, so the star stays crisp at 1:1
+        # pixels on the refresh pass.
         var fav_size := maxi(12,int(16*_es))
         for p in _card_fav_btn_map.keys():
                 var fb := _card_fav_btn_map[p] as TextureButton
@@ -478,6 +479,14 @@ func _ready()->void:
         _scan_folder()
 
 func _process(delta:float)->void:
+        if _cfg_save_pending and Time.get_ticks_msec() - _cfg_last_save_ms >= CONFIG_SAVE_MIN_INTERVAL_MS:
+                _write_config()
+        if _search_debounce > 0.0:
+                _search_debounce -= delta
+                if _search_debounce <= 0.0: _rebuild_browser(_search_pending_text)
+        if _preview_debounce > 0.0:
+                _preview_debounce -= delta
+                if _preview_debounce <= 0.0: _rebuild_browser_now()
         if is_instance_valid(physics_ctrl) and bool(physics_ctrl.call("is_running")): _update_phys_ui()
         if _is_scanning: _tick_scan()
         if not _zoo_paths_to_measure.is_empty(): _tick_zoo_measure()
@@ -523,28 +532,24 @@ func _scan_one_dir(folder:String)->void:
                         if da.current_is_dir():
                                 if fn not in SKIP_DIRS: _scan_dir_queue.append(full)
                         elif fn.get_extension().to_lower() in import_formats:
-                                # 2.5 rev 8.1 — DISK TRUTH: a refresh must ALWAYS
-                                # list every matching file under the selected
-                                # folder, even one the user removed earlier.
-                                # _hidden_paths is a VIEW flag now, not a scan
-                                # filter: _filtered_paths() keeps removed assets
-                                # out of the normal view and the browser's
-                                # "Show Hidden" toggle reveals them dimmed.
-                                # (The old guard skipped hidden paths here, so
-                                # after removing every asset a refresh could
-                                # never bring the list back — the reported bug.)
+                                # Disk truth: a refresh always lists every matching
+                                # file under the selected folder, even one the user
+                                # removed earlier. _hidden_set is a VIEW flag, not a
+                                # scan filter — _filtered_paths() keeps removed assets
+                                # out of the normal view and "Show Hidden" reveals
+                                # them dimmed.
                                 _all_paths.append(full)
                 fn=da.get_next()
         da.list_dir_end()
 
 func _status_loaded_msg()->void:
-        ## 2.5 rev 8.1 — one shared "scan/build finished" status line. When
-        ## hidden (removed) assets exist it tells the user HOW MANY and points
-        ## at the Show Hidden toggle, so "I removed everything and now the
-        ## browser is empty" always comes with a visible way out.
+        ## One shared "scan/build finished" status line. When hidden (removed)
+        ## assets exist it tells the user HOW MANY and points at the Show
+        ## Hidden toggle, so "I removed everything and now the browser is
+        ## empty" always comes with a visible way out.
         var hid:=0
         for p in _all_paths:
-                if _hidden_paths.has(p): hid+=1
+                if _hidden_set.has(p): hid+=1
         if hid>0:
                 set_status("Loaded %d assets (%d hidden — click Show Hidden to reveal them)"%[_all_paths.size()-hid,hid],C_OK)
         else:
@@ -559,6 +564,9 @@ func _can_preview_path(path:String)->bool: return path.get_extension().to_lower(
 
 func _check_visible_thumbnails()->void:
         if not is_instance_valid(_asset_scroll): return
+        # The bottom dock keeps its last rect while hidden, so rect tests
+        # alone would keep rendering thumbnails for an invisible browser.
+        if is_instance_valid(browser_ui) and not browser_ui.is_visible_in_tree(): return
         var scroll_rect := _asset_scroll.get_global_rect()
         if scroll_rect.size.x <= 1.0 or scroll_rect.size.y <= 1.0: return
         var load_rect := scroll_rect.grow_side(SIDE_BOTTOM, float(_preview_size))
@@ -596,15 +604,11 @@ func _check_visible_thumbnails()->void:
                                 _set_texture_safely(path, cached_tex, ir_id)
                                 continue
                 # ── Offline studio render (single unified queue) ──────────────
-                # rev 4: EVERY format goes through uap_thumb_gen now. The old
-                # light-format path fed cards the editor's small SQUARE previews
-                # — pillarboxed bars in the rectangular wells and blurry upscale
-                # on big cards. Self-rendering gives every asset the same
-                # studio-lit, aspect-exact, disk-cached thumbnail.
+                # Every format goes through uap_thumb_gen so all cards get the
+                # same studio-lit, aspect-exact, disk-cached thumbnail.
                 if _thumb_gen == null: continue
                 if _thumb_gen_ir_map.has(path): continue   # already queued in renderer
                 _thumb_pending[path] = Time.get_ticks_msec()   # dispatch timestamp (stale-detect)
-                _thumb_heavy_count += 1
                 _thumb_gen_ir_map[path] = ir_id
                 _thumb_gen.enqueue(path)
                 dispatched += 1
@@ -618,7 +622,7 @@ func _process_thumb_retries()->void:
         if _thumb_cache.has(path): _set_texture_safely(path, _thumb_cache[path], ir_id); return
         # Everything funnels through the offline studio renderer now.
         if _thumb_gen != null and not _thumb_gen_ir_map.has(path):
-                _thumb_pending[path] = Time.get_ticks_msec(); _thumb_heavy_count += 1
+                _thumb_pending[path] = Time.get_ticks_msec()
                 _thumb_gen_ir_map[path] = ir_id; _thumb_gen.enqueue(path)
 
 # Called by uap_thumb_gen when a thumbnail is ready (offline studio render)
@@ -626,7 +630,6 @@ func _on_thumb_gen_ready(path: String, tex: ImageTexture) -> void:
         var ir_id: int = _thumb_gen_ir_map.get(path, 0) as int
         _thumb_gen_ir_map.erase(path)
         _thumb_pending.erase(path)
-        if _thumb_heavy_count > 0: _thumb_heavy_count -= 1
 
         if tex == null:
                 # Could not render: 2D scene, broken deps, or non-3D root.
@@ -646,20 +649,17 @@ func _set_texture_safely(path:String, tex:Texture2D, ir_id:int)->void:
         var ir = instance_from_id(ir_id) as TextureRect
         if is_instance_valid(ir) and ir.get_meta("uap_path","") == path: _card_apply_texture(ir,tex)
 
-## rev 4: real thumbnails are GENERATED at the well's exact aspect ratio, so
-## STRETCH_KEEP_ASPECT_COVERED fills the well edge-to-edge with zero bars.
-## COVERED is also the structural anti-bar guarantee: if a stale or mismatched
-## texture ever lands in a card anyway (different slider size, old cache), it
-## is centre-CROPPED by a hair instead of pillarboxed with black bars.
-##  • small editor fallback icons (16-32px theme icons shown before a render
-##    exists) → draw at native size, centered. Scaling those up to the well
-##    height produced a huge blurry icon (spotted in the 2.2 editor run).
+## Thumbnails are generated at the well's exact aspect ratio, so
+## STRETCH_KEEP_ASPECT_COVERED fills the well edge-to-edge with zero bars; a
+## stale/mismatched texture is centre-cropped by a hair instead of pillarboxed.
+## Small editor fallback icons (theme icons shown before a render exists) draw
+## at native size, centered — scaling them up to the well height looks blurry.
 func _card_apply_texture(ir:TextureRect, tex:Texture2D)->void:
         if ir==null or tex==null: return
         # native-size mode is only safe when the texture is small on BOTH
         # axes (theme fallback icons). A wide texture under the height limit
         # would have been drawn at native width and spilled over the card —
-        # now it scales like every real thumbnail. Combined with
+        # it scales like every real thumbnail. Combined with
         # ir.clip_contents this makes thumbnail overflow structurally
         # impossible.
         var lim:=float(maxi(40,int(40*_es)))
@@ -674,8 +674,8 @@ func _thumb_cache_set(path:String, tex:Texture2D)->void:
         while _thumb_lru.size()>THUMB_CACHE_MAX: _thumb_cache.erase(_thumb_lru.pop_front() as String)
 
 func invalidate_thumb_cache(path: String) -> void:
-        ## Called by plugin.gd after a scene screenshot is saved to disk.
-        ## Removes the in-memory entry so the next visibility check reloads from disk.
+        ## Drops the in-memory thumbnail for one path so the next visibility
+        ## check reloads it from disk.
         _thumb_cache.erase(path); _thumb_lru.erase(path)
         _thumb_perm_failed.erase(path)
         _thumb_pending.erase(path)
@@ -710,9 +710,9 @@ func _update_card_favorite_star(card:PanelContainer,path:String)->void:
         if not _card_fav_btn_map.has(path): return
         var btn:=_card_fav_btn_map[path] as TextureButton
         if not is_instance_valid(btn): return
-        # 2.5: the star is a TextureButton now (see _add_card) — it has no
-        # per-state icon theme colors, so the dim-white vs gold language is
-        # applied through self_modulate. Same contrast values as before.
+        # The star is a TextureButton (see _add_card) — it has no per-state
+        # icon theme colors, so the dim-white vs gold language is applied
+        # through self_modulate.
         if is_favorite(path):
                 btn.self_modulate=C_WARN
         else:
@@ -721,7 +721,7 @@ func _update_card_favorite_star(card:PanelContainer,path:String)->void:
 func toggle_favorite(path:String)->void:
         if _favorite_paths.has(path): _favorite_paths.erase(path)
         else: _favorite_paths.append(path)
-        _rebuild_group_bar(); _save_config()
+        _write_config()
         # Refresh just this card's star overlay rather than rebuilding the whole
         # grid — toggling a favorite shouldn't cost a full browser rebuild.
         if _card_map.has(path):
@@ -789,21 +789,18 @@ func _set_preview_size(v:int)->void:
                         _thumb_pending.clear(); _thumb_cache.clear(); _thumb_lru.clear()
                         _thumb_gen_ir_map.clear()
                         _thumb_gen.call("clear_queue")
-        _save_config(); _rebuild_browser_now()
+        _save_config()
+        # Wheel notches arrive in bursts — rebuild the grid once per burst.
+        _preview_debounce = 0.3
 
 func _update_columns()->void:
         if not is_instance_valid(_asset_grid) or not is_instance_valid(_asset_scroll): return
-        # _grid_rm is 0 since rev 4 (the favorite star sits fully inside the
-        # card, nothing overhangs the grid) — kept in the formula so a future
-        # reservation needs no re-derivation.
-        var w:=_asset_scroll.size.x-float(_grid_rm)
+        var w:=_asset_scroll.size.x
         if w<20.0: w=browser_ui.size.x-4.0
         if w<20.0: w=180.0
         # Exact slot math: every card is a square of _preview_size px, so
         # `cols` cards plus (cols-1) separators must never exceed the visible
-        # width. This is what guarantees cards can never overlap or clip —
-        # the old formula (w/(S+6)) could overestimate by one column and let
-        # the grid overflow horizontally.
+        # width — guarantees cards can never overlap or clip horizontally.
         var sep:int=_asset_grid.get_theme_constant("h_separation")
         var cols:=maxi(1,int((w+sep)/float(_preview_size+sep)))
         var n:=_asset_grid.get_child_count()
@@ -840,7 +837,7 @@ func _ss(lo:float, hi:float, val:float, step:float)->SliderSpin:
 func _spin(lo:float, hi:float, val:float, step:float)->CompactSpin:
         var s:=CompactSpin.new(); s.min_value=lo; s.max_value=hi; s.value=val; s.step=step; return s
 
-# ─── 3D Tactile Style Helpers (2.1 UI overhaul) ─────────────────────────────
+# ─── 3D Tactile Style Helpers ─────────────────────────────────────────────
 ## Raised "tactile" active style: SOLID full-color face (no transparency),
 ## a darker bottom edge that reads as the button's lower bevel, and a subtle
 ## drop shadow so the control physically sits above the panel.
@@ -937,7 +934,7 @@ func _style_inset_button(btn:Button,active:Color=Color(0.80,0.85,0.92),inactive:
 func _style_inset_hover_box()->StyleBoxFlat:
         var sb:=_style_inset(false); sb.bg_color=S_INSET_HOVER; return sb
 
-# ─── 2.3 Global dressing pass ───────────────────────────────────────────────
+# ─── Global dressing pass ───────────────────────────────────────────────────
 ## The redesigned theme covers every control the build code styles EXPLICITLY
 ## (mode/scroll buttons, rail, chips, sections…), but a handful of controls
 ## were still created bare and therefore kept the bright default editor look
@@ -949,10 +946,8 @@ func _style_inset_hover_box()->StyleBoxFlat:
 func _apply_uap_theme(root:Node)->void:
         _theme_n_b=0; _theme_n_o=0; _theme_n_l=0
         _apply_uap_theme_walk(root)
-        # 2.5: the per-pass result is NO LONGER printed to the Output dock —
-        # it was a debug leftover from the 2.3 theme system and spammed two
-        # lines on every panel build. The counters are kept (harness can read
-        # them) but the plugin is silent by default now.
+        # The per-pass result is deliberately not printed — the counters stay
+        # readable by the test harness, but the plugin is silent by default.
 
 func _apply_uap_theme_walk(node:Node)->void:
         # OptionButton extends Button — test it FIRST.
@@ -1019,7 +1014,7 @@ func _style_line_edit(le:LineEdit)->void:
         le.add_theme_color_override("selection_color",Color(0.28,0.62,1.0,0.35))
 
 func _section(parent:VBoxContainer, title:String, open:bool=true)->VBoxContainer:
-        # 2.2 carved-in group design (shared with group chips/rows):
+        # Carved-in group design (shared with group chips/rows):
         #   • fill clearly DARKER than the panel — no semitransparent middle
         #   • NO outline border on any side
         #   • one darker line along the BOTTOM edge → the box reads as carved
@@ -1091,12 +1086,12 @@ func _build_ui()->void:
 
 ## Applies _header_collapsed to the header block: version label, title text,
 ## the folder/search rows and the status bar hide when collapsed — while the
-## group chip strip moves INTO the title bar (2.2 advanced collapse), so all
+## group chip strip moves INTO the title bar when collapsed, so all
 ## groups remain one click away in the slim state.
 ## Called once after _build_header()/_build_browser_panel() build all the
 ## nodes it touches, and again every time the button is pressed.
 func _apply_header_collapsed()->void:
-        # 2.2 advanced collapse:
+        # Advanced collapse:
         #   • expanded  → title bar shows "Ultimate Asset Placer" + version;
         #     the group chips live in their row above the browser as before.
         #   • collapsed → the SAME chip strip is moved INTO the title bar, so
@@ -1149,11 +1144,10 @@ func _build_header(root:VBoxContainer)->void:
         var bar:=ColorRect.new(); bar.color=C_ACCENT; bar.custom_minimum_size=Vector2(3,0)
         bar.size_flags_vertical=SIZE_EXPAND_FILL; tr.add_child(bar)
         var tl:=Label.new(); tl.text="Ultimate Asset Placer"; tl.add_theme_color_override("font_color",C_HEAD)
-        # 2.5 rev 6: the title NO LONGER expands across the bar — it hugs the
-        # left edge so the version label can sit right next to the text, and a
-        # flexible spacer pushes the rating stars + chevron to the right corner.
-        # NOTE: clip_text must stay OFF here — a clipping label's minimum width
-        # collapses to ~1 glyph, which would render the title as just "U".
+        # The title hugs the left edge so the version label can sit next to
+        # it, and a flexible spacer pushes the rating stars + chevron to the
+        # right corner. clip_text must stay OFF: a clipping label's minimum
+        # width collapses to ~1 glyph, rendering the title as just "U".
         tr.add_child(tl)
         _header_title_lbl=tl
         _header_ver_lbl=Label.new(); _header_ver_lbl.text=UAPIcons.get_plugin_version(); _header_ver_lbl.add_theme_color_override("font_color",C_DIM)
@@ -1163,9 +1157,8 @@ func _build_header(root:VBoxContainer)->void:
         # the right corner; collapsed → shrinks away so the chip strip takes it.
         _header_spacer=Control.new(); _header_spacer.size_flags_horizontal=SIZE_EXPAND_FILL
         tr.add_child(_header_spacer)
-        # 2.5 rev 7: retractable rating stars — this little arrow tucks the
-        # stars away (» action_arrow_right) or brings them back (« 
-        # action_arrow_left). Row order stays: [spacer][retract][STARS][chevron],
+        # Retractable rating stars — this arrow tucks the stars away or
+        # brings them back. Row order stays [spacer][retract][STARS][chevron]
         # so the stars keep hugging the right corner when visible.
         _header_stars_btn=Button.new(); _header_stars_btn.flat=true
         _header_stars_btn.focus_mode=Control.FOCUS_NONE
@@ -1173,8 +1166,8 @@ func _build_header(root:VBoxContainer)->void:
         _header_stars_btn.tooltip_text="Hide rating stars"
         _header_stars_btn.pressed.connect(_toggle_stars_hidden)
         tr.add_child(_header_stars_btn)
-        # Animated rating stars — pinned to the RIGHT CORNER (where the version
-        # label used to sit), before the collapse chevron. Never in the chips.
+        # Animated rating stars — pinned to the right corner, before the
+        # collapse chevron. Never in the chips.
         _build_rating_stars()
         _header_master_btn=Button.new(); _header_master_btn.flat=true
         _header_master_btn.focus_mode=Control.FOCUS_NONE
@@ -1183,8 +1176,8 @@ func _build_header(root:VBoxContainer)->void:
         _header_master_btn.pressed.connect(func():
                 var was_collapsed:bool=_header_collapsed
                 _header_collapsed=not _header_collapsed
-                # Opening/expanding the browser ALWAYS brings the rating stars
-                # back — hiding them is a manual, session-only choice (rev 7).
+                # Opening/expanding the browser always brings the rating stars
+                # back — hiding them is a manual, session-only choice.
                 if was_collapsed:
                         _stars_hidden=false; _apply_stars_hidden()
                 _apply_header_collapsed(); _save_config())
@@ -1205,7 +1198,7 @@ func _build_header(root:VBoxContainer)->void:
         var rfr:=Button.new(); rfr.text="Refresh"; rfr.tooltip_text="Refresh folder scan"
         UAPIcons.set_button_icon(rfr, "action_refresh")
         rfr.pressed.connect(_scan_folder); fr.add_child(rfr)
-        # 2.5 rev 8.1 — Show Hidden: reveals assets removed from the list
+        # Show Hidden: reveals assets removed from the list
         # (right-click → Remove from Asset List) as dimmed, "Hidden"-tagged
         # cards so they can be restored right here in the browser. Session-
         # only view state: a refresh/reopen always starts with them hidden
@@ -1318,27 +1311,24 @@ func _build_browser_panel(root:VBoxContainer)->void:
         # makes every card bottom-heavy, so equal gaps read vertically cramped
         # ("upper row is very close to the bottom row").
         _asset_grid.add_theme_constant_override("h_separation",6); _asset_grid.add_theme_constant_override("v_separation",maxi(6,int(10*_es)))
-        # rev 4: the favorite star sits FULLY INSIDE the card (pinned to the
-        # thumbnail's top-right corner) — nothing overhangs the grid anymore,
-        # so the old reserved right strip is gone. The wrapper stays as a
-        # zero-margin passthrough so the layout tree is unchanged.
-        _grid_rm=0
+        # The favorite star sits fully inside the card — nothing overhangs
+        # the grid, so the grid margin is a zero-margin passthrough.
         var grid_margin:=MarginContainer.new()
         grid_margin.add_theme_constant_override("margin_left",0)
-        grid_margin.add_theme_constant_override("margin_right",_grid_rm)
+        grid_margin.add_theme_constant_override("margin_right",0)
         grid_margin.add_theme_constant_override("margin_top",0)
         grid_margin.add_theme_constant_override("margin_bottom",0)
         _asset_scroll.add_child(grid_margin)
         grid_margin.add_child(_asset_grid)
 
 func _build_settings_panel(root:VBoxContainer)->void:
-        # ── 2.1 UI overhaul: Blender-style icon rail ────────────────────────────
+        # ── Left icon rail ──────────────────────────────────────────────────
         # The TabContainer is kept as the underlying page host (its tab API is
         # used everywhere for titles/icons), but its own tab bar is hidden and
         # replaced by a vertical icon-only rail on the LEFT edge of the panel.
         # Every feature is one click away with no horizontal scrolling, exactly
         # like Blender's editor toolbar.
-        # ── 2.2 additions ─────────────────────────────────────────────────────
+        # ── Header extras ──────────────────────────────────────────────────
         #  • A slim header bar above the tab page always shows the NAME of the
         #    active tab ("Place", "Transform", ...).
         #  • Hovering a rail icon pops an instant name label (no editor-tooltip
@@ -1351,9 +1341,8 @@ func _build_settings_panel(root:VBoxContainer)->void:
         var right:=VBoxContainer.new(); right.size_flags_horizontal=SIZE_EXPAND_FILL
         right.size_flags_vertical=SIZE_EXPAND_FILL; right.add_theme_constant_override("separation",int(5*_es))
         outer.add_child(right)
-        # Tab-name header: carved bar matching the section language. 2.3 adds
-        # an info button on the right end that opens the docs chapter for the
-        # tab that is currently active.
+        # Tab-name header: carved bar matching the section language, with an
+        # info button that opens the docs chapter for the active tab.
         var thp:=PanelContainer.new(); thp.size_flags_horizontal=SIZE_EXPAND_FILL
         var tsb:=StyleBoxFlat.new(); tsb.bg_color=S_SECTION_BG; tsb.set_corner_radius_all(4)
         tsb.border_width_bottom=maxi(2,int(2*_es)); tsb.border_color=S_SECTION_LINE
@@ -1391,7 +1380,7 @@ func _build_settings_panel(root:VBoxContainer)->void:
         _build_docs_rail_button()
         _refresh_tab_rail()
         _settings_tabs.tab_changed.connect(func(_i:int): _refresh_tab_rail())
-        # Instant hover-name layer (2.2): a plain Control cannot clip nor
+        # Instant hover-name layer: a plain Control cannot clip nor
         # re-layout the tip, and being the LAST child of `outer` it draws on
         # top of the tab pages. Zero min-size → invisible to the HBox layout.
         _rail_tip_layer=Control.new(); _rail_tip_layer.mouse_filter=Control.MOUSE_FILTER_IGNORE
@@ -1412,7 +1401,7 @@ func _build_settings_panel(root:VBoxContainer)->void:
         _rail_tip_panel.add_child(_rail_tip_lbl)
         _rail_tip_layer.add_child(_rail_tip_panel)
 
-## Instant rail hover-name (2.2). Shown immediately on mouse_entered — much
+## Instant rail hover-name. Shown immediately on mouse_entered — much
 ## faster than the editor's native tooltip, and positioned next to the rail
 ## like Blender's toolbar labels.
 func _show_rail_tip(btn:Control,text:String)->void:
@@ -1534,10 +1523,8 @@ func _build_docs_rail_button()->void:
         var line:=HSeparator.new(); _tab_rail.add_child(line)
         _rail_docs_btn=_make_rail_button("tab_docs",true)
         _rail_docs_btn.tooltip_text="Docs — open the full documentation window"
-        # 2.5: the rail's Docs button ALWAYS opens the Welcome chapter — it
-        # used to inherit whatever chapter the last per-tab "i" button had
-        # opened (chapter=-1 kept the previous selection), which read like a
-        # bug. Per-tab help buttons still pass their own explicit chapter.
+        # The rail's Docs button always opens the Welcome chapter; per-tab
+        # help buttons pass their own explicit chapter.
         _rail_docs_btn.pressed.connect(func(): _open_docs_window(0))
         _rail_docs_btn.mouse_entered.connect(func(): _show_rail_tip(_rail_docs_btn,"Docs"))
         _rail_docs_btn.mouse_exited.connect(_hide_rail_tip)
@@ -1552,6 +1539,9 @@ func _build_place_tab()->void:
         _info(pc,"Placed assets will be children of this node.")
         var pr:=_row("Parent",pc)
         _parent_edit=LineEdit.new(); _parent_edit.placeholder_text="(scene root)"; _parent_edit.editable=false
+        # Restore the persisted parent so the field never shows "(scene root)"
+        # while placements silently go into the saved parent after a restart.
+        if not parent_path.is_empty(): _parent_edit.text=parent_path
         _parent_edit.size_flags_horizontal=SIZE_EXPAND_FILL; pr.add_child(_parent_edit)
         var pkb:=Button.new(); pkb.text="Pick"; pkb.pressed.connect(_on_pick_parent); pr.add_child(pkb)
         var clp:=Button.new(); clp.text="X"; clp.pressed.connect(_on_clear_parent); pr.add_child(clp)
@@ -1577,8 +1567,7 @@ func _build_place_tab()->void:
         gvs.tooltip_text="Half-extent of the floor grid in metres. The grid re-centers on the viewport camera as you navigate, so a big view distance means visible grid everywhere you go."
         _row_chk("Floor Follow Cam",g,grid_follow,_on_grid_follow_changed,
                 "When ON the floor grid rides the viewport camera — as you move, the grid re-renders around you (lines stay locked onto world grid multiples, so nothing slides). Turn OFF to pin it to the world center.")
-        # 2.5 rev 7 — axis wall grids, living in the grid group as requested.
-        # Each one toggles on/off individually: ON draws the wall grid in the
+        # Axis wall grids. Each toggles individually: ON draws the wall in the
         # viewport (Grid mode, respects the master Show Grid toggle) and lets
         # objects snap onto that plane. With several enabled, the plane closest
         # to the camera under the mouse wins.
@@ -1638,9 +1627,9 @@ func _build_place_tab()->void:
         var rhb:=Button.new(); rhb.text="Restore Hidden"
         rhb.tooltip_text="Bring back every asset that was removed from the browser list via right-click."
         rhb.pressed.connect(func():
-                if _hidden_paths.is_empty():
+                if _hidden_set.is_empty():
                         set_status("No hidden assets to restore.",C_DIM); return
-                var n:=_hidden_paths.size(); _hidden_paths.clear()
+                var n:=_hidden_set.size(); _hidden_set.clear()
                 _scan_folder(); _save_config()
                 set_status("Restored %d previously removed asset(s)."%n,C_OK))
         fr2.add_child(rhb)
@@ -1805,11 +1794,8 @@ func _build_spline_tab()->void:
         _spline_mode_lbl.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
         _spline_mode_lbl.size_flags_horizontal=SIZE_EXPAND_FILL
         status_row.add_child(_spline_mode_lbl)
-        # 2.5 rev 3: "Create New Spline" was pulled OUT of the group — the user
-        # wants it as a standalone tab-level action sitting directly ABOVE the
-        # Exit button, and NEITHER of them inside the "1. Spline Node Setup"
-        # section. Both sit straight on the panel, so both get the raised 3D
-        # face (same treatment as Start Physics) to stay readable as buttons.
+        # Tab-level actions sit straight on the panel (raised 3D face) rather
+        # than inside a section.
         var create_row:=HBoxContainer.new(); create_row.add_theme_constant_override("separation",4); vb.add_child(create_row)
         var csbtn:=Button.new(); csbtn.text="+ Create New Spline"; csbtn.size_flags_horizontal=SIZE_EXPAND_FILL
         _style_raised_button(csbtn,C_BTN_ACTION)
@@ -1821,14 +1807,12 @@ func _build_spline_tab()->void:
         exit_btn.tooltip_text="Restore the previous placement mode and re-enable the ghost cursor."
         exit_btn.pressed.connect(_exit_spline_mode); exit_row.add_child(exit_btn)
         _update_spline_mode_label()
-        # 2.5: the long "Advanced Spline System…" description block was removed
-        # — every tab has an "i" help button now, so paragraphs like this one
-        # only pushed the actual controls further down the panel.
+        # Long description blocks live in the per-tab "i" help and the Docs
+        # window, not on the panel.
         vb.add_child(_sep())
         var cs_sec:=_section(vb,"1. Spline Node Setup")
         var btn_row1:=HBoxContainer.new()
-        # 2.5 rev 3: buttons INSIDE a group section keep the quiet idle look —
-        # only standalone panel-level actions are raised.
+        # Buttons inside a group section keep the quiet idle look.
         var selbtn:=Button.new(); selbtn.text="Use Selected Spline"; selbtn.size_flags_horizontal=SIZE_EXPAND_FILL
         selbtn.pressed.connect(_on_select_existing_spline); btn_row1.add_child(selbtn); cs_sec.add_child(btn_row1)
         var util_row:=HBoxContainer.new()
@@ -1953,6 +1937,9 @@ func _on_create_spline_node()->void:
                 n_idx+=1; candidate=base_name+"_%d"%n_idx
         p3d.name=candidate
         p3d.set_script(script)
+        # The spline script needs the editor's undo manager for its own
+        # undoable terrain/bake operations.
+        p3d.set("editor_plugin", placer.get("editor_plugin") if is_instance_valid(placer) else null)
         (root as Node3D).add_child(p3d); p3d.owner=root
         _active_spline_tool=p3d
         _connect_spline_warnings(_active_spline_tool)
@@ -1970,6 +1957,7 @@ func _on_select_existing_spline()->void:
         for n in sel:
                 if n is Path3D and n.get_script()!=null:
                         _active_spline_tool=n
+                        n.set("editor_plugin", placer.get("editor_plugin") if is_instance_valid(placer) else null)
                         _connect_spline_warnings(_active_spline_tool)
                         _enter_spline_mode()   # auto-activate mode 4
                         _rebuild_spline_layer_ui()
@@ -2096,9 +2084,7 @@ func _build_groups_tab()->void:
         var ar:=HBoxContainer.new(); ar.add_theme_constant_override("separation",4); vb.add_child(ar)
         var ne:=LineEdit.new(); ne.placeholder_text="New group name..."; ne.size_flags_horizontal=SIZE_EXPAND_FILL; ar.add_child(ne)
         var ab:=Button.new(); ab.text="+ Add"; ab.pressed.connect(_on_add_group.bind(ne)); ar.add_child(ab)
-        # 2.5 rev 3: standalone panel-level action (not inside any section) —
-        # raised 3D face so it never blends into the panel. Same rule that
-        # fixed Start Physics: standalone + blends → raised, in-group → idle.
+        # Standalone panel-level action — raised 3D face.
         _style_raised_button(ab,C_BTN_ACTION)
         vb.add_child(_sep())
         _group_list_vbox=VBoxContainer.new(); _group_list_vbox.size_flags_horizontal=SIZE_EXPAND_FILL
@@ -2130,14 +2116,12 @@ func _build_groups_tab()->void:
         var rm_info:=Label.new(); rm_info.text="Remove selected:"
         rm_info.add_theme_color_override("font_color",C_DIM); rm_info.size_flags_horizontal=SIZE_EXPAND_FILL; rmr.add_child(rm_info)
         var rm_btn:=Button.new(); rm_btn.text="Remove from Group"
-        # 2.5 rev 3: standalone destructive action → raised dark-red danger face
-        # with crisp white text (replaces the old dim red-on-dark label).
+        # Standalone destructive action — raised dark-red danger face.
         _style_raised_button(rm_btn,C_BTN_DANGER)
         rm_btn.tooltip_text="Removes selected asset(s) from the currently viewed group.\nIf viewing All or search, removes from every group they belong to.\nSupports multi-selection (Ctrl+Click / Shift+Click)."
         rm_btn.pressed.connect(_on_smart_remove_from_group); rmr.add_child(rm_btn)
-        # 2.5: the multi-line Drag & Drop hint section was removed — same
-        # reason as the Spline/Physics paragraphs: the per-tab "i" button and
-        # the Docs window cover it, and the groups tab reads much tighter now.
+        # Drag & drop is documented in the per-tab "i" help and the Docs
+        # window rather than a multi-line hint section.
 
 func _on_smart_remove_from_group()->void:
         # Collect the paths to remove: multi-selected takes priority, then single selected.
@@ -2238,8 +2222,7 @@ func _col_warn_needed()->bool: return collision_shape_type==0 and collision_body
 
 func _build_physics_tab()->void:
         var vb:=_make_tab("Physics", "tab_physics")
-        # 2.5: the long "Drop already-placed objects…" description is gone —
-        # the "i" button on this tab's header opens the Physics docs chapter.
+        # The "i" button on this tab's header opens the Physics docs chapter.
 
         var status_row:=HBoxContainer.new(); status_row.add_theme_constant_override("separation",6)
         status_row.size_flags_horizontal=SIZE_EXPAND_FILL; vb.add_child(status_row)
@@ -2256,21 +2239,16 @@ func _build_physics_tab()->void:
         var btn_row:=HBoxContainer.new(); btn_row.add_theme_constant_override("separation",4); vb.add_child(btn_row)
         _phys_start_btn=Button.new(); _phys_start_btn.text="Start Physics"; _phys_start_btn.size_flags_horizontal=SIZE_EXPAND_FILL
         UAPIcons.set_button_icon(_phys_start_btn,"action_bake")
-        # 2.5: Start Physics is THE primary action of this tab, but it was
-        # created bare and the global walker dressed it with the low-contrast
-        # idle style — nearly the same color as the panel, so it didn't read
-        # as a button at all. Give it a raised BLUE face (the same tactile
-        # language as the active mode buttons): clearly visible against the
-        # dark panel, unmistakably a button, still on-theme and NOT white.
+        # Start Physics is the primary action of this tab — raised BLUE face
+        # so it reads unmistakably as a button against the dark panel.
         _style_raised_button(_phys_start_btn,C_BTN_ACTION)
         _phys_start_btn.tooltip_text="Simulate the currently selected object(s) falling and settling."
         _phys_start_btn.pressed.connect(func(): if is_instance_valid(physics_ctrl): physics_ctrl.call("start_simulation"))
         btn_row.add_child(_phys_start_btn)
         _phys_stop_btn=Button.new(); _phys_stop_btn.text="Stop"; _phys_stop_btn.size_flags_horizontal=SIZE_EXPAND_FILL
         UAPIcons.set_button_icon(_phys_stop_btn,"action_stop")
-        # 2.5: while simulating, Stop/Cancel replace Start Physics in this row —
-        # they get the same raised treatment so the whole row keeps its
-        # unmistakable button look (amber = freeze, red = abort).
+        # While simulating, Stop/Cancel replace Start Physics in this row
+        # with the same raised treatment (amber = freeze, red = abort).
         _style_raised_button(_phys_stop_btn,C_BTN_STOP)
         _phys_stop_btn.tooltip_text="Freeze everything exactly where it is right now and remove any temporary collision."
         _phys_stop_btn.pressed.connect(func(): if is_instance_valid(physics_ctrl): physics_ctrl.call("stop_simulation"))
@@ -2319,8 +2297,8 @@ func _build_physics_tab()->void:
         var col:=_section(vb,"Auto Collision (temporary)",false)
         _row_chk("Auto-Add Missing Collision",col,phys_auto_add_collision,func(v:bool):phys_auto_add_collision=v;_save_config(),
                 "When ON, an object with no collision of its own gets a temporary shape for the duration of the simulation so it can land and be landed on, then it's removed. When OFF, such objects are skipped instead of getting anything added automatically. Objects that already have collision are always used exactly as they are and are never touched either way.")
-        # 2.5: the long Auto Shape explanation paragraph was removed — the
-        # OptionButton's per-item tooltips + the "i" button carry that info.
+        # The OptionButton's per-item tooltips and the "i" button carry the
+        # Auto Shape explanation.
         var so:=OptionButton.new(); so.size_flags_horizontal=SIZE_EXPAND_FILL
         for it in ["Box","Sphere","Capsule","Convex Hull (Accurate)"]: so.add_item(it)
         so.selected=phys_auto_shape
@@ -2330,14 +2308,29 @@ func _build_physics_tab()->void:
         _update_phys_ui()
 
 func on_physics_state_changed(_running:bool)->void:
+        _phys_last_state = -1
         _update_phys_ui()
+
+var _phys_last_state := -1
+var _phys_last_prog := ""
 
 func _update_phys_ui()->void:
         if not is_instance_valid(_phys_status_lbl): return
         var running:=is_instance_valid(physics_ctrl) and bool(physics_ctrl.call("is_running"))
+        var state := 1 if running else 0
+        if state == _phys_last_state:
+                if running:
+                        # Per-frame progress refresh — only when the text changed,
+                        # not on every editor frame.
+                        var prog:String=str(physics_ctrl.call("get_progress_text")) if is_instance_valid(physics_ctrl) else ""
+                        if prog != _phys_last_prog:
+                                _phys_last_prog = prog
+                                _phys_status_lbl.text="SIMULATING  —  %s\nStop to bake the result in place, or Cancel to abort." % prog
+                return
+        _phys_last_state = state
         if running:
-                var prog:String=str(physics_ctrl.call("get_progress_text")) if is_instance_valid(physics_ctrl) else ""
-                _phys_status_lbl.text="SIMULATING  —  %s\nStop to bake the result in place, or Cancel to abort." % prog
+                _phys_last_prog=str(physics_ctrl.call("get_progress_text")) if is_instance_valid(physics_ctrl) else ""
+                _phys_status_lbl.text="SIMULATING  —  %s\nStop to bake the result in place, or Cancel to abort." % _phys_last_prog
                 _phys_status_lbl.add_theme_color_override("font_color",C_OK)
                 UAPIcons.set_texture_rect(_phys_status_icon,"status_dot_filled",C_OK)
         else:
@@ -2348,7 +2341,7 @@ func _update_phys_ui()->void:
         if is_instance_valid(_phys_stop_btn): _phys_stop_btn.visible = running
         if is_instance_valid(_phys_cancel_btn): _phys_cancel_btn.visible = running
 
-# ─── Docs Window (2.1) ────────────────────────────────────────────────────────
+# ─── Docs Window ─────────────────────────────────────────────────────────────
 ## Docs no longer live in a tab. The rail's Docs button opens a dedicated,
 ## editor-centered window with a chapter sidebar on the left — click any
 ## chapter to jump straight to that section. Closing the window simply
@@ -2357,7 +2350,6 @@ func _update_phys_ui()->void:
 func _open_docs_window(chapter:int=0)->void:
         if _docs_window==null: _build_docs_window()
         if _docs_window==null: return
-        _docs_was_open=true
         # The per-tab help ("i") buttons pass the chapter that matches the
         # currently-active tab; every other caller (rail Docs button) gets the
         # default 0 = the Welcome & Quick Start chapter.
@@ -2371,7 +2363,6 @@ func _open_docs_window(chapter:int=0)->void:
         set_status("Docs opened in a separate window.",C_DIM)
 
 func _close_docs_window()->void:
-        _docs_was_open=false
         if is_instance_valid(_docs_window): _docs_window.hide()
         if is_instance_valid(_rail_docs_btn):
                 _rail_docs_btn.set_pressed_no_signal(false)
@@ -2525,7 +2516,7 @@ func _refresh_scroll_buttons()->void:
                 btn.button_pressed=(i==scroll_mode)
                 if i==scroll_mode:
                         # Active scroll target gets the same blue 3D tactile look.
-                        # NOTE: this now includes "Off" (index 0) — every active
+                        # NOTE: this includes "Off" (index 0) — every active
                         # state is highlighted, no exceptions.
                         _apply_states(btn,_style_raised(C_ACCENT),_style_raised(C_ACCENT.lightened(0.08)),_style_raised(C_ACCENT))
                         _apply_raised_text(btn)
@@ -2542,7 +2533,7 @@ func _on_show_grid_changed(v:bool)->void: show_grid=v; if is_instance_valid(plac
 func _on_grid_enabled_changed(v:bool)->void: grid_enabled=v; _save_config()
 func _on_grid_size_changed(v:float)->void: grid_size=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
 func _on_grid_h_changed(v:float)->void: grid_height=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
-# 2.5 rev 7 — axis wall grid handlers (rebuild so the wall lines follow live).
+# Axis wall grid handlers (rebuild so the wall lines follow live).
 func _on_x_grid_changed(v:bool)->void: x_grid_enabled=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
 func _on_x_grid_size_changed(v:float)->void: x_grid_size=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
 func _on_x_grid_pos_changed(v:float)->void: x_grid_pos=v; if is_instance_valid(placer):placer.call("rebuild_grid"); _save_config()
@@ -2630,18 +2621,29 @@ func _on_browse_pressed()->void:
 func _on_dir_chosen(dir:String)->void:
         _is_scanning=false; _scan_dir_queue.clear()
         current_folder=dir; if is_instance_valid(_folder_edit):_folder_edit.text=dir; _save_config(); _scan_folder()
-func _on_search_changed(text:String)->void: current_page=0; _rebuild_browser(text)
+func _on_search_changed(text:String)->void:
+        # Debounced: a rebuild per keystroke re-created up to 1000 cards while
+        # typing through large asset libraries.
+        current_page=0
+        _search_pending_text=text
+        _search_debounce=0.25
 
 func _scan_folder()->void:
         _is_scanning=false; _scan_dir_queue.clear()
         _all_paths.clear(); _build_queue.clear()
-        _thumb_pending.clear(); _ir_path_map.clear(); _card_ir_map.clear(); _card_fav_btn_map.clear()
-        _thumb_retry_queue.clear(); _thumb_perm_failed.clear(); _thumb_heavy_count=0
+        _thumb_pending.clear(); _card_ir_map.clear(); _card_fav_btn_map.clear()
+        _thumb_retry_queue.clear(); _thumb_perm_failed.clear()
+        # Re-attach assets previously dragged in from OUTSIDE the scan folder:
+        # the scan only lists current_folder, so without this the extras were
+        # merged at startup and then wiped by this very clear a moment later.
+        for p in _extra_paths_staged:
+                if ResourceLoader.exists(p) and not (p as String).begins_with(current_folder) and not _all_paths.has(p):
+                        _all_paths.append(p)
         _scan_dir_queue=[current_folder]; _is_scanning=true; set_status("Scanning...",C_DIM)
 
 func _on_show_hidden_toggled(on:bool)->void:
-        ## 2.5 rev 8.1 — browser-level "Show Hidden" toggle. ON: assets removed
-        ## via right-click reappear (dimmed, "Hidden"-tagged) in EVERY view so
+        ## Browser-level "Show Hidden" toggle. ON: assets removed via
+        ## right-click reappear (dimmed, "Hidden"-tagged) in EVERY view so
         ## they can be restored in place. OFF: back to the normal view. Pure
         ## view state — the hidden flag itself is untouched here; only an
         ## explicit restore (right-click → Restore to Asset List, drag back,
@@ -2650,11 +2652,8 @@ func _on_show_hidden_toggled(on:bool)->void:
         current_page=0
         _rebuild_browser_now()
         if on:
-                var n:=0
-                for p in _all_paths:
-                        if _hidden_paths.has(p): n+=1
-                if n>0:
-                        set_status("Showing %d hidden asset(s) — dimmed. Right-click one → Restore to Asset List."%n,C_OK)
+                if not _hidden_set.is_empty():
+                        set_status("Showing %d hidden asset(s) — dimmed. Right-click one → Restore to Asset List."%_hidden_set.size(),C_OK)
                 else:
                         set_status("No hidden assets — nothing to reveal.",C_DIM)
         else:
@@ -2665,28 +2664,27 @@ func _on_clear_browser()->void:
         _is_scanning=false; _scan_dir_queue.clear()
         _all_paths.clear(); _build_queue.clear()
         _thumb_pending.clear(); _thumb_cache.clear(); _thumb_lru.clear()
-        _ir_path_map.clear(); _card_ir_map.clear(); _card_fav_btn_map.clear()
-        _thumb_retry_queue.clear(); _thumb_perm_failed.clear(); _thumb_heavy_count=0
+        _card_ir_map.clear(); _card_fav_btn_map.clear()
+        _thumb_retry_queue.clear(); _thumb_perm_failed.clear()
         if is_instance_valid(_search_edit): _search_edit.text=""
+        _search_pending_text=""; _search_debounce=0.0
+        # Drop any active group filter — the group still exists, but "Browser
+        # cleared" with a populated view would be misleading.
+        if _active_group!=-1:
+                _active_group=-1; _refresh_group_chips()
         _rebuild_browser(""); set_status("Browser cleared.",C_DIM); _save_config()
 
 func _unhide_paths(paths:Array)->int:
-        ## 2.5 rev 8 bugfix — assets removed via right-click "Remove from list"
-        ## live in _hidden_paths, which is filtered out of EVERY browser view and
-        ## every rescan. Any explicit re-add gesture (drag & drop from the
-        ## FileSystem dock, folder import, extra-path merge) must also lift that
-        ## flag, otherwise the asset would silently stay invisible forever no
-        ## matter how often the user re-added it. Returns how many were restored.
+        ## Assets removed via right-click "Remove from list" live in
+        ## _hidden_set, which is filtered out of EVERY browser view. Any
+        ## explicit re-add gesture (drag & drop from the FileSystem dock,
+        ## folder import) must also lift that flag, otherwise the asset would
+        ## silently stay invisible forever no matter how often it is re-added.
+        ## Returns how many were restored.
         var n:=0
         for p in paths:
-                if _hidden_paths.has(p): _hidden_paths.erase(p); n+=1
+                if _hidden_set.has(p): _hidden_set.erase(p); n+=1
         return n
-
-func _merge_extra_paths(extras:Array)->void:
-        _unhide_paths(extras)
-        for p in extras:
-                if ResourceLoader.exists(p) and not _all_paths.has(p): _all_paths.append(p)
-        if not extras.is_empty(): _rebuild_browser_now()
 
 func _collect_files(folder:String,out:Array)->void:
         var da:=DirAccess.open(folder); if da==null: return
@@ -2722,9 +2720,6 @@ func _drop_asset_files(_at:Vector2,data:Variant)->void:
                 group_paths.append(fs)
                 if not _all_paths.has(fs):
                         _all_paths.append(fs); globally_added+=1
-        # 2.5 rev 8 bugfix — dropping an asset back in is an explicit "I want this
-        # back" gesture: lift the right-click "Remove from list" hidden flag so
-        # the rebuilt browser actually shows the card again.
         var restored:=_unhide_paths(group_paths)
 
         # Add to active group — this runs even for files already in _all_paths.
@@ -2768,12 +2763,12 @@ func _rebuild_browser(filter:String)->void:
         # browser layout will see a mismatched generation and discard themselves safely.
         _browser_generation += 1
         _build_queue.clear(); _thumb_pending.clear(); _thumb_retry_queue.clear()
-        _thumb_check_timer=THUMB_INTERVAL; _thumb_heavy_count=0
+        _thumb_check_timer=THUMB_INTERVAL
         # Clear offline renderer queue — paths from the old page are no longer visible
         _thumb_gen_ir_map.clear()
         if _thumb_gen != null: _thumb_gen.clear_queue()
         for c in _asset_grid.get_children(): _asset_grid.remove_child(c); c.queue_free()
-        _card_map.clear(); _card_ir_map.clear(); _ir_path_map.clear(); _card_fav_btn_map.clear()
+        _card_map.clear(); _card_ir_map.clear(); _card_fav_btn_map.clear()
         _selected_path_ui=""
         _visible_paths_filtered=_filtered_paths(filter)
         var total_pages=int(max(1,ceil(_visible_paths_filtered.size()/float(items_per_page))))
@@ -2800,9 +2795,9 @@ func _filtered_paths(filter:String)->Array:
         # Assets removed via the card context menu stay out of every view
         # (including group views) until explicitly restored — UNLESS the
         # browser's "Show Hidden" toggle is ON, which reveals them dimmed so
-        # they can be restored in place (2.5 rev 8.1).
+        # they can be restored in place.
         if not _show_hidden:
-                base=base.filter(func(p): return not _hidden_paths.has(p))
+                base=base.filter(func(p): return not _hidden_set.has(p))
         if filter.strip_edges().is_empty(): return base
         var lf:=filter.to_lower(); var result:Array=[]
         for p in base:
@@ -2822,21 +2817,14 @@ func _card_thumb_metrics(S:int)->Vector2i:
         return Vector2i(S-2*pad, S-2*pad-lbl_h-sep)
 
 func _add_card(path:String)->void:
-        # ── 2.2 square card design ────────────────────────────────────────────
-        # Cards are now perfectly SQUARE cells: a landscape (rectangular)
-        # thumbnail area on top + the asset name inside the card at the
-        # bottom. This replaces the old portrait card (square thumb + name
-        # hanging below) that overflowed the grid slot and looked cluttered.
+        # Square card cells: landscape thumbnail area on top, asset name at
+        # the bottom of the card.
         #
-        # Cards still live inside a plain Control wrapper, not directly in
-        # _asset_grid. Reason (verified with an isolated repro in 2.1):
-        # `card` is a PanelContainer, and Godot's Container base class
-        # force-resizes EVERY direct child Control to fill its own content
-        # rect on every layout pass — silently overriding any manually-set
-        # anchors/position/size on that child. That's what made the favorite
-        # star's clickable rect cover the whole card. `wrapper` is a plain
-        # Control (not a Container), so the star can sit as a sibling with
-        # its own small rect and actually stick.
+        # Cards live inside a plain Control wrapper, not directly in
+        # _asset_grid: PanelContainer's Container base class force-resizes
+        # every direct child Control to its content rect on every layout
+        # pass, silently overriding manual anchors. A plain (non-Container)
+        # wrapper lets the favorite star sit as a sibling with its own rect.
         var S:int=_preview_size
         var pad:int=maxi(3,int(4*_es))          # inner padding inside the card
         var sep:int=maxi(2,int(3*_es))          # gap thumb↔name
@@ -2849,11 +2837,9 @@ func _add_card(path:String)->void:
         var card:=PanelContainer.new()
         card.set_anchors_preset(Control.PRESET_FULL_RECT)
         card.mouse_filter=Control.MOUSE_FILTER_STOP
-        # 2.4 resting card face: dark INSET 3D — the same carved treatment as
-        # the group chips/rows: fill clearly darker than the panel, single
-        # darker line along the bottom edge, no border anywhere else. The
-        # helper bakes the same content margins (pad) that every state
-        # stylebox now carries, so the layout never shifts on select/deselect.
+        # Resting card face: dark INSET 3D — same carved treatment as the
+        # group chips/rows. Content margins match every state stylebox so the
+        # layout never shifts on select/deselect.
         var normal_style:=_card_select_stylebox(false)
         card.add_theme_stylebox_override("panel",normal_style)
         var vb:=VBoxContainer.new(); vb.add_theme_constant_override("separation",sep)
@@ -2868,36 +2854,29 @@ func _add_card(path:String)->void:
         wsb.set_content_margin_all(0)
         well.add_theme_stylebox_override("panel",wsb)
         well.size_flags_horizontal=SIZE_EXPAND_FILL
-        # 2.5: the thumbnail can NEVER spill out of the well again — no matter
-        # what a texture or stretch mode does, drawing is clipped to the well
-        # rect ("thumbnails coming on top of the cards" report).
+        # Drawing is clipped to the well rect no matter what a texture or
+        # stretch mode does.
         well.clip_contents=true
-        # 2.3 CRITICAL: the well is a PanelContainer, which STOPS mouse events
-        # by default — clicks on the thumbnail were being eaten here and never
-        # reached the card's gui_input (that's why only clicking the title
-        # selected a card). IGNORE lets the click fall through to the card
-        # itself, so the ENTIRE card is clickable: thumbnail, name, padding.
+        # The well is a PanelContainer, which STOPS mouse events by default —
+        # IGNORE lets clicks fall through to the card, so the entire card is
+        # clickable: thumbnail, name, padding.
         well.mouse_filter=Control.MOUSE_FILTER_IGNORE
-        # rev 4: the well spans the card's FULL inner width again. (2.5 rev 1-3
-        # stopped it one pad short of the right edge to reserve a star zone for
-        # the half-outside "corner badge" star — that design is gone: the star
-        # now sits fully inside ON the thumbnail's top-right corner, exactly
-        # like the user's green-check mockup.)
+        # The well spans the card's full inner width; the favorite star sits
+        # fully inside, on the thumbnail's top-right corner.
         vb.add_child(well)
-        # The well is remembered on the card so _card_apply_state() can tint it
-        # blue/amber together with the card face (see 2.3 selection design).
+        # The well is remembered on the card so _card_apply_state() can tint
+        # it blue/amber together with the card face.
         card.set_meta("uap_well",well)
         var thumb_w:int=inner_w   # rev 4: full inner width (no star-zone reserve)
         var ir:=TextureRect.new(); ir.custom_minimum_size=Vector2(thumb_w,thumb_h)
         ir.expand_mode=TextureRect.EXPAND_IGNORE_SIZE
         ir.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_COVERED
-        # 2.5: belt-and-suspenders for the same overflow report — even if a
-        # future stretch mode ever draws beyond the TextureRect's bounds, the
-        # texture is clipped to them and can never sit "on top of the card".
+        # Even if a future stretch mode ever draws beyond the TextureRect's
+        # bounds, the texture is clipped to them.
         ir.clip_contents=true
         ir.mouse_filter=Control.MOUSE_FILTER_IGNORE; well.add_child(ir)
         ir.set_meta("uap_path",path)
-        _card_ir_map[path]=ir; _ir_path_map[ir.get_instance_id()]=path
+        _card_ir_map[path]=ir
         if _thumb_cache.has(path): _card_apply_texture(ir,_thumb_cache[path] as Texture2D)
         else:
                 var fb:=_fallback_icon(path); if fb!=null: _card_apply_texture(ir,fb)
@@ -2905,18 +2884,15 @@ func _add_card(path:String)->void:
         nl.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
         nl.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS
         nl.add_theme_font_size_override("font_size",maxi(10,int(11*_es)))
-        # 2.4 name: near-white text with a black outline — ASSET BROWSER CARD
-        # NAMES ONLY. Every other label/button in the plugin keeps its plain
-        # look (the 2.2 pass removed outlines everywhere else on purpose).
+        # Near-white text with a black outline — asset browser card names
+        # only; every other label/button in the plugin keeps its plain look.
         nl.add_theme_color_override("font_color",Color(0.93,0.95,1.0))
         nl.add_theme_color_override("font_outline_color",Color(0,0,0,1))
         nl.add_theme_constant_override("outline_size",maxi(2,int(3*_es)))
-        # CRITICAL (verified by probe): the ambient editor theme's Label
-        # "normal" stylebox carries content margins that INFLATE the label's
-        # minimum size (name row measured 24px tall instead of the budgeted
-        # 17 — silently overflowing the square card). A zero-margin
-        # StyleBoxEmpty makes min size = pure text, so the square card budget
-        # math (lbl_h) is exact. Same lesson as the star button in 2.1.
+        # Zero-margin stylebox: the ambient editor theme's Label "normal"
+        # stylebox carries content margins that inflate the label's minimum
+        # size and silently overflow the square card budget. StyleBoxEmpty
+        # makes min size = pure text, so the lbl_h budget is exact.
         nl.add_theme_stylebox_override("normal",StyleBoxEmpty.new())
         nl.custom_minimum_size=Vector2(0,lbl_h)
         nl.vertical_alignment=VERTICAL_ALIGNMENT_CENTER
@@ -2926,10 +2902,9 @@ func _add_card(path:String)->void:
         if (ext2=="tscn" or ext2=="scn"):
                 var opened_root:=EditorInterface.get_edited_scene_root()
                 if is_instance_valid(opened_root) and opened_root.scene_file_path==path:
-                        # 2.4: same inset language as the resting card, but with
-                        # a warm dark fill so the open state still pops; the
-                        # "Opened" chip on the thumbnail (below) now carries the
-                        # open signal — the name stays uniform white/outline.
+                        # Open-state card face: warm dark inset so the open scene
+                        # pops; the "Opened" chip on the thumbnail carries the
+                        # signal — the name stays uniform white/outline.
                         var open_style:=StyleBoxFlat.new()
                         open_style.bg_color=Color(0.216,0.118,0.048)
                         open_style.set_corner_radius_all(5)
@@ -2939,11 +2914,10 @@ func _add_card(path:String)->void:
                         open_style.content_margin_top=pad;  open_style.content_margin_bottom=pad
                         card.add_theme_stylebox_override("panel",open_style)
                         card.tooltip_text=path+"\nCurrently open — cannot place inside itself."
-                        # "Opened" chip pinned to the THUMBNAIL's bottom-left
-                        # corner (user request). It is a child of the
-                        # TextureRect — a plain Control, not a Container — so
-                        # its anchors/offsets are deterministic and the square
-                        # card budget is untouched.
+                        # "Opened" chip pinned to the thumbnail's bottom-left
+                        # corner. It is a child of the TextureRect (a plain
+                        # Control, not a Container) so its anchors/offsets are
+                        # deterministic and the card budget is untouched.
                         var chip:=Label.new(); chip.text="Opened"
                         chip.mouse_filter=Control.MOUSE_FILTER_IGNORE
                         var chip_h:=maxi(11,int(13*_es))
@@ -2959,19 +2933,18 @@ func _add_card(path:String)->void:
                         chip.add_theme_color_override("font_color",C_WARN)
                         chip.add_theme_color_override("font_outline_color",Color(0,0,0,1))
                         chip.add_theme_constant_override("outline_size",maxi(2,int(2*_es)))
-                        # Zero-margin stylebox: without it the ambient editor
-                        # theme inflates the label's minimum size far beyond
-                        # the 13px chip rect and the chip spills out of the
-                        # thumbnail (confirmed by probe + harness).
+                        # Zero-margin stylebox: the ambient editor theme would
+                        # otherwise inflate the label's minimum size past the
+                        # chip rect and spill it out of the thumbnail.
                         chip.add_theme_stylebox_override("normal",StyleBoxEmpty.new())
                         ir.add_child(chip)
-        # 2.5 rev 8.1 — removed-asset ghosting: while the browser's "Show
-        # Hidden" toggle is ON, cards removed from the list reappear DIMMED
-        # with a small "Hidden" tag on the thumbnail's top-left (the favorite
-        # star owns the top-right, "Opened" owns the bottom-left), so they
-        # read as "not really in the list". Everything stays interactive —
-        # click/right-click still work so the asset can be restored in place.
-        if _hidden_paths.has(path):
+        # While the browser's "Show Hidden" toggle is ON, cards removed from
+        # the list reappear DIMMED with a small "Hidden" tag on the
+        # thumbnail's top-left (the favorite star owns the top-right,
+        # "Opened" owns the bottom-left), so they read as "not really in the
+        # list". Everything stays interactive — click/right-click still work
+        # so the asset can be restored in place.
+        if _hidden_set.has(path):
                 card.modulate=Color(1,1,1,0.42)
                 var hchip:=Label.new(); hchip.text="Hidden"
                 hchip.mouse_filter=Control.MOUSE_FILTER_IGNORE
@@ -2998,30 +2971,19 @@ func _add_card(path:String)->void:
                 _card_apply_state(card,2)
         wrapper.add_child(card)
         # Favorite star: a SIBLING of `card` inside `wrapper`, not a child of
-        # `card` — see the comment at the top of this function for why.
-        # rev 4 star placement — FINAL design taken literally from the user's
-        # green-check mockup: the star is pinned ON the THUMBNAIL's top-right
-        # corner, fully INSIDE the card. Its top edge lines up with the well's
-        # top edge and its right edge with the well's right edge (both are
-        # `pad` inside the card's edges, because the card's stylebox content
-        # margin is the same `pad` on every side) — so the star sits exactly
-        # on the thumbnail's corner, never overflows the card, and never
-        # floats in the gap between cards (the red-X complaint). It overlaps
+        # `card` (see the comment at the top of this function). Pinned ON the
+        # thumbnail's top-right corner, fully inside the card: its edges line
+        # up with the well's corner (`pad` inside the card edges). It overlaps
         # the thumbnail's corner on purpose; legibility over any thumbnail is
         # handled by the dark outline baked into the texture via
         # UAPIcons.get_icon_outlined().
         #
-        # CONTROL TYPE — TextureButton, not Button (kept from 2.5): a (flat,
-        # icon-only, StyleBoxEmpty-overridden) Button still inherits the
-        # editor theme's Button minimum size (measured 32x28 at es=1 in the
-        # 4.7.1 editor). Godot grows the control to its minimum size in the
-        # END direction, so the 16px button silently became a 32x28 rect
-        # starting at its offset position — the ICON drew left-aligned inside
-        # that oversized rect, i.e. several px off the intended corner. That
-        # was the real root cause of "the star position is wrong" in every
-        # earlier round. TextureButton has no text, no font, no styleboxes:
-        # with ignore_texture_size its minimum size is ZERO — the offsets
-        # below are therefore the final rect, pixel-exact, on every theme.
+        # TextureButton, not Button: an icon-only Button still inherits the
+        # editor theme's Button minimum size, and Godot grows the control to
+        # its minimum size in the END direction — the icon would draw offset
+        # from the intended corner. TextureButton has no text, no font, no
+        # styleboxes: with ignore_texture_size its minimum size is ZERO and
+        # the offsets below are the final rect on every theme.
         var fav_btn:=TextureButton.new()
         var fav_size:=maxi(12,int(16*_es))
         var fav_m:int=pad   # same inset as the card padding → well's corner
@@ -3058,7 +3020,7 @@ func _add_card(path:String)->void:
                 if mb.button_index==MOUSE_BUTTON_LEFT and mb.pressed:
                         if mb.ctrl_pressed: _toggle_multi_select(card_path,card)
                         elif mb.shift_pressed: _range_select(card_path)
-                        else: _clear_multi_select(); _select_card(card_path,card,normal_style)
+                        else: _clear_multi_select(); _select_card(card_path,card)
                 elif mb.button_index==MOUSE_BUTTON_RIGHT and mb.pressed:
                         # Context menu: favorites / add-to-group / remove from list.
                         get_viewport().set_input_as_handled()
@@ -3079,9 +3041,9 @@ func _fallback_icon(path:String)->Texture2D:
                 if theme.has_icon(candidate,"EditorIcons"): return theme.get_icon(candidate,"EditorIcons")
         return null
 
-# ─── Asset Card Right-Click Context Menu (2.1) ──────────────────────────────
+# ─── Asset Card Right-Click Context Menu ─────────────────────────────────
 ## Right-clicking an asset card opens a themed popup with quick actions:
-##   • Open Scene / View Model (2.4 — single asset only)
+##   • Open Scene / View Model (single asset only)
 ##   • Toggle Favorites for the card (or all cards in the active multi-selection)
 ##   • Add to any created group (submenu)
 ##   • Remove the asset(s) from the browser list (reversible, never deletes files)
@@ -3093,8 +3055,8 @@ func _open_card_context_menu(path:String)->void:
         if targets.is_empty(): return
         var menu:=PopupMenu.new()
         _style_popup_menu(menu)
-        # 2.4 — single-target convenience: open a scene in the editor, or view
-        # a model. Only offered for ONE asset (multi-target has no meaningful
+        # Single-target convenience: open a scene in the editor, or view a
+        # model. Only offered for ONE asset (multi-target has no meaningful
         # single "open" action) and only for scene/model formats.
         if targets.size()==1:
                 var p0:=targets[0] as String
@@ -3128,13 +3090,13 @@ func _open_card_context_menu(path:String)->void:
         menu.add_submenu_node_item("Add to Group", group_menu, 1)
         menu.set_item_icon(menu.get_item_index(1), UAPIcons.get_icon("tab_groups"))
         menu.add_separator()
-        # 2.5 rev 8.1 — dual-purpose last item: on a visible card it removes
-        # (hides) the asset; on a HIDDEN card (only reachable while the
-        # browser's "Show Hidden" toggle is ON) it restores the asset to the
-        # list. Same handler id, label chosen by the targets' hidden state.
+        # Dual-purpose last item: on a visible card it removes (hides) the
+        # asset; on a hidden card (only reachable while "Show Hidden" is ON)
+        # it restores the asset to the list. Same handler id, label chosen by
+        # the targets' hidden state.
         var all_hidden:bool=true
         for p in targets:
-                if not _hidden_paths.has(p): all_hidden=false; break
+                if not _hidden_set.has(p): all_hidden=false; break
         var rm_idx := menu.get_item_count()
         if all_hidden:
                 menu.add_icon_item(UAPIcons.get_icon("action_refresh"), "Restore to Asset List", 2)
@@ -3142,8 +3104,8 @@ func _open_card_context_menu(path:String)->void:
         else:
                 menu.add_icon_item(UAPIcons.get_icon("action_delete"), "Remove from Asset List", 2)
                 menu.set_item_tooltip(rm_idx,"Hide %s from the browser list.\nFiles are NOT deleted. Reveal via the browser's Show Hidden button, or restore via Place tab → Format Filter → Restore Hidden."%noun)
-                # NOTE: PopupMenu has no per-item FONT color API in Godot 4.7 — tint the
-                # icon red instead, which keeps the destructive action visually distinct.
+                # PopupMenu has no per-item font color API — tint the icon red
+                # instead to keep the destructive action visually distinct.
                 menu.set_item_icon_modulate(rm_idx,C_ERROR)
         menu.id_pressed.connect(_on_ctx_menu_id.bind(targets))
         add_child(menu)
@@ -3186,29 +3148,28 @@ func _on_ctx_menu_id(id:int, targets:Array)->void:
                         if _active_group==-2: _rebuild_browser_now()
                         set_status(("Removed from Favorites: " if all_fav else "Added to Favorites: ")+_ctx_target_summary(targets),C_OK)
                 2:
-                        # 2.5 rev 8.1 — the master _all_paths list is DISK TRUTH
-                        # now: removing only sets the hidden VIEW flag (the old
-                        # code also erased the path here, which is what made a
-                        # removed asset un-recoverable by refresh). If every
-                        # target is already hidden (menu opened while "Show
+                        # The master _all_paths list is DISK TRUTH: removing only
+                        # sets the hidden VIEW flag (the file list itself stays
+                        # intact, so a refresh always brings everything back). If
+                        # every target is already hidden (menu opened while "Show
                         # Hidden" is ON), this id RESTORES them instead.
                         var all_hidden:bool=true
                         for p in targets:
-                                if not _hidden_paths.has(p): all_hidden=false; break
+                                if not _hidden_set.has(p): all_hidden=false; break
                         if all_hidden:
                                 var n:int=_unhide_paths(targets)
-                                _save_config(); _rebuild_browser_now()
+                                _write_config(); _rebuild_browser_now()
                                 set_status("Restored %d asset(s) to the list."%n,C_OK)
                         else:
                                 var removed:int=0
                                 for p in targets:
-                                        if not _hidden_paths.has(p): _hidden_paths.append(p)
+                                        if not _hidden_set.has(p): _hidden_set[p]=true
                                         if _multi_selected.has(p): _multi_selected.erase(p)
                                         removed+=1
-                                _save_config(); _rebuild_browser_now()
+                                _write_config(); _rebuild_browser_now()
                                 set_status("Removed %d asset(s) from the list (restorable via Show Hidden)."%removed,C_WARN)
                 3:
-                        # 2.4 — Open Scene / View Model (single target only).
+                        # Open Scene / View Model (single target only).
                         if targets.size()==1: _open_or_view_asset(targets[0] as String)
 
 func _editor_icon(names:Array)->Texture2D:
@@ -3222,11 +3183,11 @@ func _editor_icon(names:Array)->Texture2D:
         return UAPIcons.get_icon("action_browse")
 
 func _open_or_view_asset(path:String)->void:
-        ## 2.4 — "Open Scene" / "View Model" from the card context menu.
-        ## Scenes open in the editor (the native unsaved-changes confirmation
-        ## applies). Models open in the Inspector: mesh resources (obj/mesh)
-        ## directly, and imported scene formats (glb/gltf/fbx/blend) via their
-        ## first mesh — both render an interactive 3D preview there.
+        ## "Open Scene" / "View Model" from the card context menu. Scenes open
+        ## in the editor (the native unsaved-changes confirmation applies).
+        ## Models open in the Inspector: mesh resources (obj/mesh) directly,
+        ## and imported scene formats (glb/gltf/fbx/blend) via their first
+        ## mesh — both render an interactive 3D preview there.
         if not ResourceLoader.exists(path):
                 set_status("File not found: "+path.get_file(),C_ERROR); return
         var ext:=path.get_extension().to_lower()
@@ -3245,15 +3206,15 @@ func _open_or_view_asset(path:String)->void:
         if res==null:
                 set_status("Could not load: "+path.get_file(),C_ERROR); return
         if res is PackedScene and not is_scene:
-                # Imported model scene (glb/gltf/fbx/blend). NOTE (verified in
-                # the 4.7.1 harness): EditorInterface.open_scene_from_path() is
-                # a SILENT NO-OP for imported scenes — no error, no scene
-                # switch. So instead: instantiate off-tree, pull the first mesh
-                # and open it in the Inspector, which renders an interactive 3D
-                # preview. If the scene has no mesh, show the resource itself.
+                # Imported model scene (glb/gltf/fbx/blend):
+                # EditorInterface.open_scene_from_path() is a silent no-op for
+                # imported scenes, so instantiate off-tree, pull the first mesh
+                # and open it in the Inspector (interactive 3D preview). If the
+                # scene has no mesh, show the resource itself.
                 var ps:=res as PackedScene
                 var inst:Node = ps.instantiate()
-                var mesh:=_find_first_mesh(inst)
+                # instantiate() returns null for corrupt or failed imports.
+                var mesh:Mesh = null if inst == null else _find_first_mesh(inst)
                 if inst!=null: inst.free()
                 if mesh!=null:
                         EditorInterface.edit_resource(mesh)
@@ -3291,29 +3252,27 @@ func _ctx_target_summary(targets:Array)->String:
         if targets.size()==1: return (targets[0] as String).get_file().get_basename()
         return "%d assets"%targets.size()
 
-func _select_card(path:String,card:PanelContainer,normal_style:StyleBoxFlat)->void:
+func _select_card(path:String,card:PanelContainer)->void:
         if not ResourceLoader.exists(path):
                 set_status("File not found: "+path.get_file()+" — refresh the browser.",C_ERROR); return
         var ext:=path.get_extension().to_lower()
+        var root:=EditorInterface.get_edited_scene_root()
         if ext=="tscn" or ext=="scn":
-                var root:=EditorInterface.get_edited_scene_root()
                 if is_instance_valid(root):
                         var open_path:=root.scene_file_path
                         if not open_path.is_empty() and open_path==path:
                                 set_status("This scene is currently open — cannot place it inside itself.",C_WARN); return
+        if root==null or not root is Node3D:
+                # Bail BEFORE touching any selection state, or the card would
+                # stay highlighted with no placement active behind it.
+                set_status("Open a 3D scene first to start placing assets.",C_WARN); return
         if not _selected_path_ui.is_empty() and _card_map.has(_selected_path_ui):
                 var prev:=_card_map[_selected_path_ui] as PanelContainer
                 if is_instance_valid(prev) and prev!=card:
                         _card_apply_state(prev,0)
         selected_path=path; _selected_path_ui=path; _last_clicked_path=path
-        # Active card = blue 3D raised across the WHOLE card: solid blue face,
-        # darker bottom bevel, plus a blue-tinted thumbnail well so the blue
-        # reads around the image too — same tactile language as the mode/scroll
-        # buttons, in blue as requested.
+        # Active card = blue 3D raised across the WHOLE card.
         _card_apply_state(card,1)
-        var root:=EditorInterface.get_edited_scene_root()
-        if root==null or not root is Node3D:
-                set_status("Open a 3D scene first to start placing assets.",C_WARN); return
         if is_instance_valid(placer):placer.call("start_placement",path)
         _is_placing=true
         if is_instance_valid(_stop_btn):_stop_btn.disabled=false
@@ -3329,8 +3288,7 @@ func activate_asset_from_eyedropper(path:String)->void:
         if _card_map.has(path):
                 var card:=_card_map[path] as PanelContainer
                 if is_instance_valid(card):
-                        var ns:=_card_select_stylebox(false)
-                        _select_card(path,card,ns)
+                        _select_card(path,card)
                         # Scroll the browser so the newly-active card is actually visible,
                         # not just selected off-screen with no visual confirmation.
                         if is_instance_valid(_asset_scroll):
@@ -3346,19 +3304,17 @@ func activate_asset_from_eyedropper(path:String)->void:
         set_status("Picked: "+path.get_file().get_basename()+" (hidden by current filter)   |   RMB / ESC = cancel",C_PLACING)
 
 func _card_select_stylebox(selected:bool)->StyleBoxFlat:
-        # 2.4 card faces. Resting (selected=false): dark INSET 3D — carved into
-        # the panel exactly like the group chips/rows: fill clearly darker than
-        # the panel, a single darker line along the bottom edge, no border on
-        # any other side. selected=true is kept for compatibility and returns
-        # the raised amber multi-select treatment (see below).
+        # Card faces. Resting (selected=false): dark INSET 3D, carved into the
+        # panel exactly like the group chips/rows. selected=true returns the
+        # raised amber multi-select treatment (see below).
         var sb:=StyleBoxFlat.new(); sb.set_corner_radius_all(5)
         if selected:
                 return _card_select_stylebox_raised(C_MULTI)
         sb.bg_color=C_CARD_BG
         sb.border_width_bottom=maxi(2,int(2*_es))
         sb.border_color=S_INSET_SHADOW
-        # Content margins MUST match the initial card stylebox (pad), otherwise
-        # the thumb well would change width every time a card is deselected.
+        # Content margins must match the initial card stylebox, otherwise the
+        # thumb well changes width every time a card is deselected.
         sb.content_margin_left=maxi(3,int(4*_es)); sb.content_margin_right=maxi(3,int(4*_es))
         sb.content_margin_top=maxi(3,int(4*_es));  sb.content_margin_bottom=maxi(3,int(4*_es))
         return sb
@@ -3378,15 +3334,11 @@ func _card_select_stylebox_raised(color:Color)->StyleBoxFlat:
         sb.content_margin_top=maxi(3,int(4*_es));  sb.content_margin_bottom=maxi(3,int(4*_es))
         return sb
 
-## 2.3 — ONE entry point for every card visual state. `card` is the
-## PanelContainer (as stored in _card_map), `state`:
-##   0 = resting        → dark INSET face (2.4: carved like the groups) +
-##                        neutral darkest-layer well
-##   1 = single-select  → BLUE raised 3D face + blue-tinted well FRAMED in
-##                        blue (2.4: ring around the thumbnail)
-##   2 = multi-select   → AMBER raised 3D face (same bevel+shadow language,
-##                        previously a flat bordered box with no 3D) +
-##                        amber-tinted well
+## ONE entry point for every card visual state. `card` is the PanelContainer
+## (as stored in _card_map), `state`:
+##   0 = resting        → dark INSET face + neutral darkest-layer well
+##   1 = single-select  → blue raised 3D face + blue-tinted, blue-framed well
+##   2 = multi-select   → amber raised 3D face + amber-tinted well
 func _card_apply_state(card:PanelContainer, state:int)->void:
         if not is_instance_valid(card): return
         var well_v:Variant = card.get_meta("uap_well", null) if card.has_meta("uap_well") else null
@@ -3402,7 +3354,7 @@ func _card_apply_state(card:PanelContainer, state:int)->void:
                         _card_well_bg(well_v,C_WELL_BG)
 
 ## Re-tints a card's thumbnail well (see _card_apply_state). Accepts an
-## untyped ref because the meta lookup may return null for old cards.
+## untyped ref because the meta lookup may return null.
 func _card_well_bg(well_v:Variant, col:Color, ring:=Color(0,0,0,0))->void:
         if well_v==null or not (well_v is PanelContainer): return
         var well:=well_v as PanelContainer
@@ -3410,10 +3362,9 @@ func _card_well_bg(well_v:Variant, col:Color, ring:=Color(0,0,0,0))->void:
         var sb:=StyleBoxFlat.new(); sb.bg_color=col; sb.set_corner_radius_all(3)
         sb.set_content_margin_all(0)
         if ring.a>0.0:
-                # 2.4 active well: the thumbnail is FRAMED by a ring in the
-                # active color (blue single-select / amber multi-select) on top
-                # of the tinted background — the selection reads around the
-                # image, not just under it.
+                # Active well: the thumbnail is framed by a ring in the active
+                # color on top of the tinted background — the selection reads
+                # around the image, not just under it.
                 sb.set_border_width_all(maxi(1,int(2*_es)))
                 sb.border_color=ring
         else:
@@ -3523,9 +3474,8 @@ func _rebuild_group_bar()->void:
                                 if not _favorite_paths.has(p): _favorite_paths.append(p)
         _groups = _groups.filter(func(g): return (g as Dictionary)["name"] != "Favorites")
         for i in _groups.size(): _add_filter_btn((_groups[i] as Dictionary)["name"],i)
-        # (2.5 rev 6) the rating stars are NOT part of the chip strip anymore —
-        # they are built once by _build_header() and pinned to the header's
-        # right corner, so rebuilding the chips never touches them.
+        # The rating stars are not part of the chip strip — they are built
+        # once by _build_header() and pinned to the header's right corner.
         if is_instance_valid(_group_drop):
                 _group_drop.clear(); _group_drop.add_icon_item(UAPIcons.get_icon("feature_favorite"), "Favorites")
                 for g in _groups: _group_drop.add_item((g as Dictionary)["name"])
@@ -3554,13 +3504,10 @@ func _tint_fav_chip(btn:Button)->void:
         btn.add_theme_color_override("icon_hover_pressed_color",C_WARN.lightened(0.15))
         btn.add_theme_color_override("icon_focus_color",Color(0.60,0.63,0.72))
 
-## Builds the animated rating stars ONCE and pins them to the RIGHT CORNER of
-## the header title row (2.5 rev 6) — between the flexible spacer and the
-## collapse chevron, exactly where the version label used to sit. The stars
-## are NOT a child of the group chip strip: they never wrap with the group
-## buttons and they never move when the collapse toggles — the chips come and
-## go around them while the stars stay pinned. Clicking the stars area opens
-## RATING_URL in the user's browser.
+## Builds the animated rating stars once and pins them to the right corner of
+## the header title row — between the flexible spacer and the collapse chevron.
+## They are NOT a child of the group chip strip: the chips come and go around
+## them while the stars stay pinned. Clicking the stars opens RATING_URL.
 func _build_rating_stars()->void:
         if is_instance_valid(_rating_stars): return
         var RatingStars := load(get_script().resource_path.get_base_dir() + "/uap_rating.gd")
@@ -3578,9 +3525,9 @@ func _open_rating_page()->void:
         set_status("Opening the ratings page — thank you for rating Ultimate Asset Placer!", null)
         OS.shell_open(RATING_URL)
 
-## 2.5 rev 7 — tucks the rating stars behind the retract arrow (or reveals
-## them again). Session-only state on purpose: the asset browser ALWAYS opens
-## with the stars visible, and expanding the collapsed bar re-shows them too.
+## Tucks the rating stars behind the retract arrow (or reveals them again).
+## Session-only state: the browser always opens with the stars visible, and
+## expanding the collapsed bar re-shows them.
 func _toggle_stars_hidden()->void:
         _stars_hidden = not _stars_hidden
         _apply_stars_hidden()
@@ -3592,10 +3539,10 @@ func _apply_stars_hidden()->void:
                         "action_arrow_left" if _stars_hidden else "action_arrow_right")
                 _header_stars_btn.tooltip_text = "Show rating stars" if _stars_hidden else "Hide rating stars"
 
-## Keeps the filter-bar chips in sync with _active_group: exactly ONE chip
-## reads as active at any time. (The pressed state of a toggle button is set
+## Keeps the filter-bar chips in sync with _active_group: exactly one chip
+## reads as active at any time. The pressed state of a toggle button is set
 ## automatically on click, so the previously-active chip must be unpressed
-## explicitly — without this, every chip ever clicked stayed highlighted.)
+## explicitly.
 func _refresh_group_chips()->void:
         for i in _group_chip_btns.size():
                 var btn:=_group_chip_btns[i] as Button
@@ -3613,9 +3560,14 @@ func _on_add_group(ne:LineEdit)->void:
         _rebuild_group_list(); _rebuild_group_bar(); _save_config()
 
 func _on_remove_group(idx:int)->void:
+        if idx < 0 or idx >= _groups.size(): return
         _groups.remove_at(idx)
-        if _active_group>=_groups.size(): _active_group=-1
-        _rebuild_group_list(); _rebuild_group_bar(); _save_config()
+        # Removing the active group — or one before it — silently re-points
+        # _active_group at a shifted neighbour unless the index is adjusted.
+        if _active_group == idx: _active_group = -1
+        elif _active_group > idx: _active_group -= 1
+        _rebuild_group_list(); _rebuild_group_bar(); _refresh_group_chips()
+        _rebuild_browser_now(); _save_config()
 
 func _on_add_to_group(opt:OptionButton)->void:
         if selected_path.is_empty(): set_status("Select an asset first.",C_WARN); return
@@ -3743,16 +3695,10 @@ func _on_zoo_pressed()->void:
 
         _zoo_is_building=false; _zoo_items.clear(); _zoo_paths_to_measure.clear()
         var zoo:=Node3D.new(); zoo.name="AssetZoo"
-        # force_readable_name=true is the actual fix for the reported @Node@6239
-        # bug. `zoo.name` WAS already being set before add_child (that part was
-        # already correct) — the real cause is that Godot's add_child(), when the
-        # requested name collides with an existing sibling (e.g. a second zoo
-        # created while an earlier "AssetZoo" is still in the scene), silently
-        # DISCARDS the requested name and substitutes its own @Node3D@ID-style
-        # placeholder UNLESS force_readable_name is explicitly passed — verified
-        # directly against this exact Godot build: default add_child() on a
-        # collision produced "@Node3D@2"; force_readable_name=true produced
-        # "AssetZoo2", matching the naming scheme actually wanted here.
+        # force_readable_name=true: on a name collision with an existing
+        # sibling (a second zoo while an earlier "AssetZoo" is still in the
+        # scene), add_child silently substitutes an @Node3D@ID-style name
+        # unless this flag is passed.
         (root as Node3D).add_child(zoo, true); zoo.owner=root
         _zoo_node=zoo; _zoo_index=0
         for path in source_paths:
@@ -3798,7 +3744,7 @@ func _zoo_compute_layout()->void:
         for i in items.size():
                 var ci:=i%cols; var ri:=i/cols
                 (items[i] as Dictionary)["x"]=x_off[ci]; (items[i] as Dictionary)["z"]=z_off[ri]
-        _zoo_cols=cols; _zoo_x_off=x_off; _zoo_z_off=z_off; _zoo_index=0
+        _zoo_index=0
         _zoo_is_building=true; set_status("Zoo: placing 0 / %d..."%items.size(),C_DIM)
 
 func _tick_zoo_build()->void:
@@ -3864,18 +3810,27 @@ func _set_owner_recursive(node:Node,root:Node)->void:
         node.owner=root
         for c in node.get_children(): _set_owner_recursive(c,root)
 
-func _collect_aabb(node:Node,origin:Node3D,inout:AABB)->AABB:
-        if node is MeshInstance3D:
-                var mi:=node as MeshInstance3D
-                if mi.mesh!=null:
-                        var rel:=origin.global_transform.affine_inverse()*mi.global_transform
-                        var xf:=rel*mi.mesh.get_aabb()
-                        inout=xf if inout.size==Vector3.ZERO else inout.merge(xf)
-        for c in node.get_children(): inout=_collect_aabb(c,origin,inout)
-        return inout
-
-# ─── Config ───────────────────────────────────────────────────────────────────
 func _save_config()->void:
+        ## Debounced entry point — the actual disk write happens at most
+        ## every CONFIG_SAVE_MIN_INTERVAL_MS (and once more when the panel
+        ## exits). Slider drags and toggles call this dozens of times per
+        ## second; writing the whole config that often both stalls the editor
+        ## and risks a truncated file wiping all persisted state.
+        if _cfg_save_pending: return
+        if Time.get_ticks_msec() - _cfg_last_save_ms >= CONFIG_SAVE_MIN_INTERVAL_MS:
+                _write_config()
+        else:
+                _cfg_save_pending = true
+
+func _flush_config()->void:
+        if _cfg_save_pending: _write_config()
+
+func _exit_tree()->void:
+        _flush_config()
+
+func _write_config()->void:
+        _cfg_save_pending = false
+        _cfg_last_save_ms = Time.get_ticks_msec()
         var cfg:=ConfigFile.new()
         cfg.set_value("s","folder",current_folder)
         var extra:Array=[]
@@ -3929,22 +3884,39 @@ func _save_config()->void:
                 var g:=_groups[i] as Dictionary
                 cfg.set_value("g","g%d_n"%i,g["name"]); cfg.set_value("g","g%d_p"%i,g["paths"])
         cfg.set_value("g","favorites",_favorite_paths)
-        cfg.set_value("g","hidden",_hidden_paths)
-        cfg.save(CONFIG_PATH)
+        cfg.set_value("g","hidden",Array(_hidden_set.keys()))
+        # Atomic write: temp file first, then keep the last known-good file as
+        # .bak and swap. A crash mid-write can never leave a truncated config.
+        var tmp_path := CONFIG_PATH + ".tmp"
+        var bak_path := CONFIG_PATH + ".bak"
+        DirAccess.remove_absolute(tmp_path)
+        if cfg.save(tmp_path) != OK:
+                push_warning("Ultimate Asset Placer: could not write the config file.")
+                return
+        DirAccess.remove_absolute(bak_path)
+        if FileAccess.file_exists(CONFIG_PATH):
+                DirAccess.rename_absolute(CONFIG_PATH, bak_path)
+        if DirAccess.rename_absolute(tmp_path, CONFIG_PATH) != OK:
+                push_warning("Ultimate Asset Placer: could not finalize the config file write.")
 
 func _load_config()->void:
-        var cfg:=ConfigFile.new(); if cfg.load(CONFIG_PATH)!=OK: return
+        var cfg:=ConfigFile.new()
+        if cfg.load(CONFIG_PATH) != OK:
+                # Primary config unreadable (fresh install, or a pre-2.5.2
+                # truncated write) — fall back to the backup copy before
+                # giving up, so one bad write can never reset the user's
+                # groups, favorites and hidden list.
+                if cfg.load(CONFIG_PATH + ".bak") != OK: return
         current_folder        =cfg.get_value("s","folder","res://")
-        var saved_extra:Array =cfg.get_value("s","extra_paths",[]) as Array
-        call_deferred("_merge_extra_paths",saved_extra)
+        # Extras (assets dragged in from outside the scan folder) are staged
+        # here and merged by _scan_folder() AFTER it clears the path list —
+        # merging earlier meant the first scan wiped them ~2 frames later.
+        _extra_paths_staged   =cfg.get_value("s","extra_paths",[]) as Array
         place_mode            =cfg.get_value("s","place_mode",1)
         if place_mode == 4:
                 # Spline mode (4) can never be validly restored on load — the active
-                # spline *node* it depends on is a live scene reference, which is
-                # never persisted. Loading straight into place_mode 4 with no
-                # _active_spline_tool used to leave the plugin looking completely
-                # dead (no ghost cursor, viewport clicks silently swallowed) with no
-                # indication why, until the user happened to click a mode button.
+                # spline node it depends on is a live scene reference, which is
+                # never persisted.
                 place_mode = 1
         _prev_place_mode      =place_mode
         scroll_mode           =cfg.get_value("s","scroll_mode",0)
@@ -4009,7 +3981,9 @@ func _load_config()->void:
         for i in gc:
                 _groups.append({"name":cfg.get_value("g","g%d_n"%i,"Group"),"paths":cfg.get_value("g","g%d_p"%i,[])})
         _favorite_paths=cfg.get_value("g","favorites",[]) as Array
-        _hidden_paths=cfg.get_value("g","hidden",[]) as Array
+        _hidden_set.clear()
+        for hp in cfg.get_value("g","hidden",[]) as Array:
+                _hidden_set[hp] = true
         # Migration: older configs may have saved "Favorites" as a regular named
         # group entry — Favorites is now always the built-in star slot (-2) and
         # must never live in _groups. Move its paths into _favorite_paths (rather

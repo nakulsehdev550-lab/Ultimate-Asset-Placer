@@ -1,3 +1,72 @@
+## v2.5.2 — deep polish release (35+ fixes)
+
+#### Undo reliability
+- Paint strokes (volumetric brush and line painting) now commit as ONE undo
+  step instead of one per stamp — strokes no longer flood and evict the
+  editor's undo history.
+- Fixed placement undo failing on the second undo after a redo (UndoRedo
+  rejected the freed object argument). Undo now detaches placements and the
+  undo system manages their lifetime, so cycles are unlimited.
+- MultiMesh paint-stroke undo snapshots full transform arrays instead of
+  instance counts — undo/redo no longer diverges after interleaved paints.
+- "Generate Instance Collision", "Clear All MultiMesh Instances", "Commit
+  MultiMesh" and the spline terrain tools (Drop to Ground, Wrap Points,
+  Subdivide & Wrap, Smooth, Sharpen) are fully undoable now.
+- "Commit MultiMesh" is implemented: the painted geometry stays in the scene
+  as regular content and later painting starts a fresh MultiMesh.
+- "Mesh Vertex Snap" is implemented: vertex mode can now snap to real mesh
+  vertices (deduped, size-capped samples per mesh) instead of only the 8
+  AABB corners.
+
+#### Transform correctness
+- Fixed spline bakes (to nodes / to MultiMesh) doubling the path transform —
+  baked content keeps its exact world placement on any transformed Path3D.
+- Fixed baked MultiMesh collision using instance-local transforms as global:
+  bodies now compose the MMI world transform and offset primitive shapes by
+  the mesh AABB center.
+- Fixed generated MultiMesh collision accumulating duplicates on repeat runs;
+  regeneration now replaces and is undoable.
+- Capsule collision shapes are clamped to height ≥ 2×radius.
+- Surface-mode ghost push uses the deepest corner across ALL ghost meshes,
+  matching the commit path (multi-part assets no longer sink).
+
+#### Editor performance
+- Asset browser search rebuilds are debounced; Ctrl+wheel size changes
+  rebuild once per burst.
+- Config saving is throttled and atomic (temp file + backup + swap) — slider
+  drags no longer write the whole config dozens of times per second, and a
+  crash mid-write can no longer wipe groups/favorites/hidden lists.
+- Spline tool: only edited layers rebuild, and curve-drag rebuilds are
+  throttled; UV-less deform meshes no longer spam generate_tangents errors.
+- Thumbnails stop rendering while the Asset Browser dock is closed.
+- Physics status line updates only when its text changes (was every frame).
+- Vertex-mode screen tests are budget-capped; thumbnails for large libraries
+  are bounded by a disk-cache cap with oldest-first pruning.
+
+#### Fixes & hardening
+- Assets dragged in from outside the scan folder persist across restarts and
+  refreshes again (a startup race wiped them seconds after loading).
+- Fixed a crash-class script error when opening a corrupt/failed import via
+  "View Model" or spline mesh loading (instantiate() null guard).
+- 2D scenes no longer leak an instantiated node per click (Node3D guard
+  before any placement work).
+- Removing a group no longer re-points the active filter at the wrong group;
+  clearing the browser resets the group filter; the persisted Parent field is
+  restored in the UI after restart.
+- Clicking a card in a non-3D scene no longer highlights the card without
+  starting placement.
+- Random Yaw spline layers are seeded per layer: saved scatter layouts
+  survive rebuilds and reloads unchanged.
+- "Drop to Ground (Keep Shape)" snaps the LOWEST point to the ground (was:
+  the point closest to the terrain).
+- The spline orphan sweep no longer duplicates every layer on scene reload,
+  and it never touches owned user nodes other than the plugin's own layers.
+- Held rotation/scale keys are cleared when the editor loses focus (no more
+  infinite auto-repeat after alt-tab).
+- Brush stamps scatter in the surface tangent plane (stays ON walls); the
+  removed live-viewport scene-capture pipeline (a write-only per-scene-switch
+  cost) is fully removed; the plugin drops a per-frame ticker node.
+
 ## v2.5.1 — the Physics tab now runs your project's own physics engine
 
 The Physics tab's drop-and-settle simulation was rewritten from scratch. The
