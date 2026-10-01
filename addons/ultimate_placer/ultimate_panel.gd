@@ -236,6 +236,20 @@ var phys_gravity:float=9.8; var phys_bounciness:float=0.15; var phys_friction:fl
 var phys_align_to_ground:bool=true; var phys_random_tumble:bool=false
 var phys_auto_shape:int=0; var phys_max_fall_time:float=15.0; var phys_auto_stop:bool=true
 var phys_auto_add_collision:bool=true
+# ─── Surface filters, mirror placement, seeded randomness ────────────────────
+var slope_filter_enabled:bool=false; var slope_max_deg:float=45.0
+var height_filter_enabled:bool=false
+var height_filter_min:float=0.0; var height_filter_max:float=100.0
+# Mirror plane: axis 0 mirrors X across the YZ plane at x = mirror_offset,
+# axis 1 mirrors Z across the XY plane at z = mirror_offset.
+var mirror_enabled:bool=false; var mirror_axis:int=0; var mirror_offset:float=0.0
+# Seed lock: while ON, every placement stroke re-seeds the placer's RNG with
+# seed_value, making random rot/tilt/scale/scatter decisions reproducible.
+var seed_lock:bool=false; var seed_value:int=1
+# ─── Presets + recent assets ─────────────────────────────────────────────────
+const RECENT_MAX := 8
+var _recent_paths:Array=[]   # most-recent-first asset paths, capped at RECENT_MAX
+var _presets:Array=[]        # [{name:String, data:Dictionary}] saved placement presets
 var import_formats:Array=ALL_FORMATS.duplicate()
 var current_folder:String="res://"; var selected_path:String=""
 var shortcuts:Dictionary={
@@ -288,7 +302,7 @@ var _docs_cur_chapter:int=0
 
 # Tab rail icon names, index-aligned with the feature tabs built below
 # (Place, Transform, Paint, Spline, Material, Groups, Keys, Collision, Physics).
-const RAIL_ICON_NAMES := ["tab_place","tab_transform","tab_paint","tab_spline","tab_material","tab_collision","tab_physics","tab_groups","tab_keys"]
+const RAIL_ICON_NAMES := ["tab_place","tab_transform","tab_paint","tab_spline","tab_material","tab_collision","tab_physics","tab_groups","tab_keys","tab_scene","tab_presets"]
 
 # Shared style constants for the 3D tactile language:
 #  • raised  = active/selected  (full color, darker bottom edge, subtle drop shadow)
@@ -323,7 +337,7 @@ const C_BTN_STOP    := Color(0.48,0.34,0.08)   # dark amber   — stop/hold acti
 # Spline→"Spline Tab", Material→"Material & Collision",
 # Groups→"Groups & Favorites", Keys→"Keys & Shortcuts",
 # Collision→"Material & Collision", Physics→"Physics Tab".
-const TAB_DOCS_CHAPTER := [4,5,6,7,8,8,9,10,11]
+const TAB_DOCS_CHAPTER := [4,5,6,7,8,8,9,10,11,12,13]
 
 # Page opened when the user clicks the animated rating stars pinned to the
 # right corner of the header title row. Swap this one constant to point the
@@ -414,6 +428,7 @@ func refresh_icons() -> void:
         UAPIcons.clear_cache()
         if is_instance_valid(_settings_tabs):
                 var icon_by_tab_name := {
+                "Scene": "tab_scene", "Presets": "tab_presets",
                         "Place":"tab_place", "Transform":"tab_transform", "Paint":"tab_paint",
                         "Spline":"tab_spline", "Material":"tab_material", "Groups":"tab_groups",
                         "Keys":"tab_keys", "Collision":"tab_collision", "Physics":"tab_physics",
@@ -1245,6 +1260,15 @@ func _build_header(root:VBoxContainer)->void:
         var csel:=Button.new(); csel.text="X"; csel.pressed.connect(_clear_multi_select); _multisel_bar.add_child(csel)
         for b:Button in [asel,rmsel,csel]: _style_idle_button(b)
         rmsel.add_theme_color_override("font_color",C_ERROR)
+        # Recent assets: the last used assets as one-click chips. Hidden when
+        # empty; the placer pushes every placement start here.
+        _recent_bar=FlowContainer.new(); _recent_bar.size_flags_horizontal=SIZE_EXPAND_FILL
+        _recent_bar.clip_contents=true
+        _recent_bar.add_theme_constant_override("h_separation",2)
+        _recent_bar.add_theme_constant_override("v_separation",2)
+        _recent_bar.visible=false
+        _search_panel.add_child(_recent_bar)
+        _rebuild_recent_bar()
 
 func _build_mode_bar(root:VBoxContainer)->void:
         var mp:=PanelContainer.new(); mp.size_flags_horizontal=SIZE_EXPAND_FILL
@@ -1375,6 +1399,7 @@ func _build_settings_panel(root:VBoxContainer)->void:
         _build_place_tab(); _build_transform_tab(); _build_paint_tab()
         _build_spline_tab(); _build_material_tab(); _build_collision_tab()
         _build_physics_tab(); _build_groups_tab(); _build_keys_tab()
+        _build_scene_tab(); _build_presets_tab()
         # Docs is NOT a tab page anymore: the rail's docs button opens a
         # dedicated chapter-style window in the center of the screen.
         _build_docs_rail_button()
@@ -1490,6 +1515,10 @@ func _raise_rail_button(btn:Button)->void:
 func _on_rail_tab_pressed(idx:int)->void:
         if is_instance_valid(_settings_tabs): _settings_tabs.current_tab=idx
         _refresh_tab_rail()
+        # The Scene tab is a live view of the edited scene — rescan it each
+        # time it opens so the rows never go stale.
+        if is_instance_valid(_settings_tabs) and _settings_tabs.get_tab_title(idx)=="Scene":
+                _scene_rescan()
 
 ## Re-dresses every rail button to match the TabContainer's live state and
 ## keeps the tab-name header above the page in sync.
@@ -1607,6 +1636,18 @@ func _build_place_tab()->void:
         _row_chk("Mesh Vertex Snap",sv,vertex_snap_mesh,_on_vertex_mesh_changed,"Vertex mode: test actual mesh vertices.")
         var vssr:=_row("Magnet px",sv); _vss_spin=_ss(5.0,300.0,vertex_snap_strength,1.0)
         _vss_spin.value_changed.connect(func(v:float): vertex_snap_strength=v;_save_config()); vssr.add_child(_vss_spin)
+        var sf:=_section(vb,"Surface Filters",false)
+        _info(sf,"Restrict Surface-mode placement, brush stamps and MultiMesh stamps to valid ground: slope = angle between the surface normal and world up; height = world Y of the hit point. The ghost turns red where the surface is out of range and the stamp is skipped.")
+        _row_chk("Max Slope",sf,slope_filter_enabled,_on_slope_filter_changed,
+                "Block placement on surfaces steeper than Max deg (0 = flat ground only).")
+        var smr:=_row("Max deg",sf); var sms:=_ss(0.0,89.0,slope_max_deg,1.0)
+        sms.value_changed.connect(_on_slope_max_changed); smr.add_child(sms)
+        _row_chk("Height Range",sf,height_filter_enabled,_on_hfilter_changed,
+                "Only place between Min Y and Max Y (world height of the hit point).")
+        var hnr:=_row("Min Y",sf); var hns:=_ss(-10000.0,10000.0,height_filter_min,0.1)
+        hns.value_changed.connect(func(v:float): height_filter_min=v;_save_config()); hnr.add_child(hns)
+        var hxr:=_row("Max Y",sf); var hxs:=_ss(-10000.0,10000.0,height_filter_max,0.1)
+        hxs.value_changed.connect(func(v:float): height_filter_max=v;_save_config()); hxr.add_child(hxs)
         var ff:=_section(vb,"Format Filter",false)
         _info(ff,"Choose which 3D formats to scan. Right-click any asset card to remove it from the browser list; removed assets come back anytime — click Show Hidden in the browser (right-click a dimmed card → Restore to Asset List), drag them in from the FileSystem dock, or use the Restore Hidden button below.")
         var fmt_flow:=FlowContainer.new(); fmt_flow.size_flags_horizontal=SIZE_EXPAND_FILL
@@ -1706,6 +1747,32 @@ func _build_transform_tab()->void:
         rsmins.value_changed.connect(func(v:float):rscale_min=v;_save_config()); rsmn.add_child(rsmins)
         var rsmx:=_row("Max",rs); var rsmaxs:=_ss(0.01,20.0,rscale_max,0.01)
         rsmaxs.value_changed.connect(func(v:float):rscale_max=v;_save_config()); rsmx.add_child(rsmaxs)
+        var mir:=_section(vb,"Mirror Placement",false)
+        _info(mir,"Every placement also spawns a mirrored twin across a world plane: X = the YZ plane at Offset X, Z = the XY plane at Offset Z. Yaw and roll are reflected so the pair reads symmetric. Works for clicks, paint strokes, the brush and MultiMesh painting — the twin joins the same undo step.")
+        _row_chk("Enable Mirror",mir,mirror_enabled,_on_mirror_changed,
+                "Place a symmetric twin across the chosen plane with every stamp.")
+        var mar:=_row("Plane",mir); var mao:=OptionButton.new(); mao.size_flags_horizontal=SIZE_EXPAND_FILL
+        mao.add_item("X — mirror across YZ"); mao.set_item_tooltip(0,"Twin appears at x = Offset, yaw/roll reflected.")
+        mao.add_item("Z — mirror across XY"); mao.set_item_tooltip(1,"Twin appears at z = Offset, yaw/roll reflected.")
+        mao.selected=mirror_axis
+        mao.item_selected.connect(func(idx:int): mirror_axis=idx;_save_config()); mar.add_child(mao)
+        var mor:=_row("Offset",mir); var mos:=_ss(-2000.0,2000.0,mirror_offset,0.25)
+        mos.value_changed.connect(func(v:float): mirror_offset=v;_save_config()); mor.add_child(mos)
+        var mou:=Label.new(); mou.text="m"; mou.add_theme_color_override("font_color",C_DIM); mor.add_child(mou)
+        var sd:=_section(vb,"Random Seed",false)
+        _info(sd,"Lock the seed to make every random decision (random rotation/tilt/scale, scatter, brush deposits) reproducible: re-painting the same stroke with the same seed yields the same layout. Reshuffle rolls a fresh seed; unlock for pure randomness.")
+        _row_chk("Lock Seed",sd,seed_lock,_on_seed_lock_changed,
+                "Re-seed the RNG at the start of every stroke with the seed below.")
+        var svr:=_row("Seed",sd); var svs:=CompactSpin.new()
+        svs.value=seed_value; svs.min_value=-2147483648; svs.max_value=2147483647; svs.step=1
+        svs.value_changed.connect(func(v:float): seed_value=int(v);_save_config()); svr.add_child(svs)
+        var shb2:=Button.new(); shb2.text="Reshuffle"
+        shb2.tooltip_text="Roll a new random seed."
+        shb2.pressed.connect(func():
+                seed_value=randi()
+                if is_instance_valid(svs): svs.set_value_no_signal(float(seed_value))
+                _save_config())
+        svr.add_child(shb2); _style_idle_button(shb2)
 
 func _orient_btn(parent:Container,label:String,rx:float,ry:float,rz:float)->void:
         var btn:=Button.new(); btn.text=label
@@ -3878,6 +3945,17 @@ func _write_config()->void:
         cfg.set_value("s","phys_tumble",phys_random_tumble); cfg.set_value("s","phys_shape",phys_auto_shape)
         cfg.set_value("s","phys_max_fall",phys_max_fall_time); cfg.set_value("s","phys_auto_stop",phys_auto_stop)
         cfg.set_value("s","phys_auto_add_col",phys_auto_add_collision)
+        cfg.set_value("s","slope_en",slope_filter_enabled); cfg.set_value("s","slope_max",slope_max_deg)
+        cfg.set_value("s","hfil_en",height_filter_enabled)
+        cfg.set_value("s","hfil_min",height_filter_min); cfg.set_value("s","hfil_max",height_filter_max)
+        cfg.set_value("s","mirror_en",mirror_enabled); cfg.set_value("s","mirror_ax",mirror_axis)
+        cfg.set_value("s","mirror_off",mirror_offset)
+        cfg.set_value("s","seed_lock",seed_lock); cfg.set_value("s","seed_val",seed_value)
+        cfg.set_value("g","recent",_recent_paths)
+        cfg.set_value("p","count",_presets.size())
+        for pi in _presets.size():
+                cfg.set_value("p","p%d_n"%pi,(_presets[pi] as Dictionary)["name"])
+                cfg.set_value("p","p%d_d"%pi,(_presets[pi] as Dictionary)["data"])
         for a in shortcuts.keys(): cfg.set_value("k",a,shortcuts[a])
         cfg.set_value("g","count",_groups.size())
         for i in _groups.size():
@@ -4014,3 +4092,451 @@ func _load_config()->void:
         phys_max_fall_time       =cfg.get_value("s","phys_max_fall",15.0)
         phys_auto_stop           =cfg.get_value("s","phys_auto_stop",true)
         phys_auto_add_collision  =cfg.get_value("s","phys_auto_add_col",true)
+        slope_filter_enabled     =cfg.get_value("s","slope_en",false)
+        slope_max_deg            =cfg.get_value("s","slope_max",45.0)
+        height_filter_enabled    =cfg.get_value("s","hfil_en",false)
+        height_filter_min        =cfg.get_value("s","hfil_min",0.0)
+        height_filter_max        =cfg.get_value("s","hfil_max",100.0)
+        mirror_enabled           =cfg.get_value("s","mirror_en",false)
+        mirror_axis              =clampi(int(cfg.get_value("s","mirror_ax",0)),0,1)
+        mirror_offset            =cfg.get_value("s","mirror_off",0.0)
+        seed_lock                =cfg.get_value("s","seed_lock",false)
+        seed_value               =int(cfg.get_value("s","seed_val",1))
+        _recent_paths            =(cfg.get_value("g","recent",[]) as Array).duplicate()
+        while _recent_paths.size() > RECENT_MAX: _recent_paths.pop_back()
+        _presets.clear()
+        var pc:int=int(cfg.get_value("p","count",0))
+        for pi in pc:
+                var pn:=str(cfg.get_value("p","p%d_n"%pi,""))
+                if pn.is_empty(): continue
+                var pd:Dictionary=cfg.get_value("p","p%d_d"%pi,{}) as Dictionary
+                _presets.append({"name":pn,"data":pd})
+
+
+# ─── Recent Assets ───────────────────────────────────────────────────────────
+var _recent_bar:FlowContainer=null
+
+func _push_recent(path:String)->void:
+        ## Funnel for every placement start (card click, eyedropper, recent
+        ## chip): keeps the most-recent-first chip list fresh. Dedup + cap so
+        ## the bar never grows.
+        if path.is_empty(): return
+        _recent_paths.erase(path)
+        _recent_paths.push_front(path)
+        while _recent_paths.size() > RECENT_MAX: _recent_paths.pop_back()
+        _rebuild_recent_bar()
+
+func _rebuild_recent_bar()->void:
+        if not is_instance_valid(_recent_bar): return
+        # Detach first, then queue_free: a chip press re-triggers this
+        # rebuild while the button's own signal is still emitting — an
+        # immediate free() there is a "locked object" error.
+        for c in _recent_bar.get_children():
+                _recent_bar.remove_child(c); c.queue_free()
+        if _recent_paths.is_empty():
+                _recent_bar.visible=false
+                return
+        var cap:=_lbl("Recent:",C_DIM); _recent_bar.add_child(cap)
+        for p in _recent_paths:
+                var chip:=Button.new()
+                chip.text=(p as String).get_file().get_basename()
+                chip.tooltip_text=(p as String)+"\nClick to place again."
+                chip.clip_text=true
+                chip.custom_minimum_size=Vector2(0,0)
+                chip.pressed.connect(_activate_recent.bind(p))
+                _recent_bar.add_child(chip)
+                _style_inset_button(chip)
+        _recent_bar.visible=true
+
+func _activate_recent(path:String)->void:
+        ## One-click re-place from the recent bar. Prefers the real card (so
+        ## selection styling stays in sync); falls back to direct activation
+        ## when the asset is filtered out of the current browser view.
+        if not ResourceLoader.exists(path):
+                set_status("Recent asset no longer exists: "+path.get_file(),C_WARN)
+                _recent_paths.erase(path); _save_config(); _rebuild_recent_bar()
+                return
+        if _card_map.has(path):
+                var c:=_card_map[path] as PanelContainer
+                if is_instance_valid(c):
+                        _select_card(path,c); return
+        # Same card bookkeeping as _select_card: the previously active card
+        # must lose its highlight even though this asset has no visible card.
+        if not _selected_path_ui.is_empty() and _card_map.has(_selected_path_ui):
+                var prev:=_card_map[_selected_path_ui] as PanelContainer
+                if is_instance_valid(prev): _card_apply_state(prev,0)
+        selected_path=path; _selected_path_ui=path
+        if is_instance_valid(placer): placer.call("start_placement",path)
+        _is_placing=true
+        if is_instance_valid(_stop_btn): _stop_btn.disabled=false
+        set_status("Placing: "+path.get_file().get_basename()+"   |   RMB / ESC = cancel",C_PLACING)
+
+
+# ─── Surface filter / mirror / seed handlers ─────────────────────────────────
+func _on_slope_filter_changed(v:bool)->void: slope_filter_enabled=v;_save_config()
+func _on_slope_max_changed(v:float)->void: slope_max_deg=v;_save_config()
+func _on_hfilter_changed(v:bool)->void: height_filter_enabled=v;_save_config()
+func _on_mirror_changed(v:bool)->void:
+        mirror_enabled=v;_save_config()
+        if is_instance_valid(placer): placer.call("refresh_ghosts")
+func _on_seed_lock_changed(v:bool)->void: seed_lock=v;_save_config()
+
+
+# ─── Scene Tab: manage everything the plugin placed ──────────────────────────
+var _scene_rows_vbox:VBoxContainer=null
+var _scene_summary_lbl:Label=null
+## One summary row per source: grouped placed assets, a MultiMesh paint set
+## or a spline bake. nodes = targets the row's buttons operate on,
+## pairs = {pr, col, par} records for undoable deletion (assets only).
+class SceneRow:
+        var label:String
+        var count:int
+        var kind:String        # "asset" | "mm" | "bake"
+        var nodes:Array        # nodes to select/delete for this row
+        var pairs:Array        # {pr,col,par} records (assets only)
+        func _init(l:String,c:int,k:String,n:Array,p:Array=[])->void:
+                label=l; count=c; kind=k; nodes=n; pairs=p
+
+func _scene_collect()->Array:
+        var rows:Array=[]
+        var root:=EditorInterface.get_edited_scene_root()
+        if root==null or not root is Node3D: return rows
+        # 1) Asset instances: any Node3D carrying the placed meta, climbed to
+        #    its undo root (the _RB wrapper when auto-collision wrapped it).
+        #    Grouped by source asset so a busy scene reads as a short list.
+        var grouped:Dictionary={}
+        var stack:Array=[root]
+        while not stack.is_empty():
+                var n:Node=stack.pop_back()
+                for c in n.get_children(): stack.append(c)
+                if n is Node3D and (n as Node).has_meta("uap_placed"):
+                        var r:Node=n
+                        var par:=r.get_parent()
+                        if par is RigidBody3D and (par.name as String).ends_with("_RB"): r=par
+                        if r==root: continue
+                        var asset:=str((n as Node).get_meta("uap_placed"))
+                        var label:=asset.get_file().get_basename() if not asset.is_empty() else String(r.name)
+                        if not grouped.has(label):
+                                grouped[label]={"nodes":[],"pairs":[]}
+                        var g:Dictionary=grouped[label]
+                        if not (g["nodes"] as Array).has(r):
+                                (g["nodes"] as Array).append(r)
+                                var col:Node=null
+                                var rpar:=r.get_parent()
+                                if is_instance_valid(rpar) and not (r is RigidBody3D):
+                                        col=rpar.get_node_or_null(String(r.name)+"_Collision")
+                                (g["pairs"] as Array).append({"pr":r,"col":col,"par":rpar})
+        var labels:Array=grouped.keys(); labels.sort()
+        for lb in labels:
+                var g2:Dictionary=grouped[lb]
+                rows.append(SceneRow.new(lb,(g2["nodes"] as Array).size(),"asset",g2["nodes"],g2["pairs"]))
+        # 2) MultiMesh paint sets (live, un-committed parents only — commit
+        #    hands ownership to the user by renaming out of the UAP_ namespace).
+        var mmp:=root.get_node_or_null("UAP_MultiMeshPaint")
+        if mmp!=null:
+                for c in mmp.get_children():
+                        if c is MultiMeshInstance3D and (c as MultiMeshInstance3D).multimesh!=null:
+                                var mmi:=c as MultiMeshInstance3D
+                                var cnt:int=mmi.multimesh.instance_count
+                                rows.append(SceneRow.new(String(mmi.name).trim_prefix("UAP_MM_"),cnt,"mm",[mmi]))
+        # 3) Spline bakes created by the Spline tab (roots named <path>_Baked /
+        #    <path>_MMBaked live directly under the scene root).
+        for c in root.get_children():
+                var nm:=String(c.name)
+                if (nm.ends_with("_Baked") or nm.ends_with("_MMBaked")) and c is Node3D:
+                        rows.append(SceneRow.new(nm,1,"bake",[c]))
+        return rows
+
+func _scene_rescan()->void:
+        if not is_instance_valid(_scene_rows_vbox): return
+        # Detach first, then queue_free: rebuild can run from a row button's
+        # own pressed signal, where an immediate free() would hit a lock.
+        for c in _scene_rows_vbox.get_children():
+                _scene_rows_vbox.remove_child(c); c.queue_free()
+        var rows:=_scene_collect()
+        var n_assets:=0; var n_mm:=0; var n_bakes:=0
+        for r in rows:
+                var row:=r as SceneRow
+                match row.kind:
+                        "asset": n_assets+=row.count
+                        "mm": n_mm+=1
+                        "bake": n_bakes+=1
+        if is_instance_valid(_scene_summary_lbl):
+                if rows.is_empty():
+                        _scene_summary_lbl.text="Nothing placed yet."
+                else:
+                        var parts:Array=[]
+                        if n_assets>0: parts.append("%d asset%s"%[n_assets,"" if n_assets==1 else "s"])
+                        if n_mm>0: parts.append("%d MultiMesh set%s"%[n_mm,"" if n_mm==1 else "s"])
+                        if n_bakes>0: parts.append("%d spline bake%s"%[n_bakes,"" if n_bakes==1 else "s"])
+                        _scene_summary_lbl.text=" | ".join(parts)
+        if rows.is_empty():
+                var empty:=_lbl("Place something in the viewport and it will show up here.",C_DIM)
+                _scene_rows_vbox.add_child(empty)
+                return
+        for r in rows:
+                var row:=r as SceneRow
+                var hb:=HBoxContainer.new(); hb.add_theme_constant_override("separation",4)
+                hb.size_flags_horizontal=SIZE_EXPAND_FILL
+                var nl:=Label.new(); nl.text=row.label
+                nl.size_flags_horizontal=SIZE_EXPAND_FILL; nl.clip_text=true
+                nl.add_theme_color_override("font_color",C_HEAD); hb.add_child(nl)
+                var cl:=Label.new()
+                cl.text=("%d"%row.count) if row.kind!="mm" else ("%d inst"%row.count)
+                cl.add_theme_color_override("font_color",C_ACCENT2)
+                cl.custom_minimum_size=Vector2(int(46*_es),0)
+                cl.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT; hb.add_child(cl)
+                var sb:=Button.new(); sb.text="Select"
+                sb.tooltip_text="Select this %s in the scene tree."%row.label
+                sb.pressed.connect(_scene_select.bind(row.nodes)); hb.add_child(sb)
+                var db:=Button.new(); db.text="Del"
+                db.tooltip_text="Delete this %s (undoable)."%row.label
+                db.pressed.connect(_scene_delete.bind(row.pairs if row.kind=="asset" else row.nodes,row.kind=="asset"))
+                hb.add_child(db)
+                _style_idle_button(sb); _style_idle_button(db)
+                if row.kind=="mm":
+                        nl.add_theme_color_override("font_color",C_ACCENT2)
+                elif row.kind=="bake":
+                        nl.add_theme_color_override("font_color",C_WARN)
+                _scene_rows_vbox.add_child(hb)
+
+func _scene_select(nodes:Array)->void:
+        var sel:=EditorInterface.get_selection(); sel.clear()
+        var picked:=0
+        for n in nodes:
+                if is_instance_valid(n) and n is Node:
+                        sel.add_node(n as Node); picked+=1
+        set_status("Selected %d node(s)." % picked,C_OK)
+        _scene_rescan()
+
+func _scene_select_all()->void:
+        var roots:Array=[]
+        for r in _scene_collect():
+                var row:=r as SceneRow
+                if row.kind=="asset": roots.append_array(row.nodes)
+        if roots.is_empty():
+                set_status("No placed assets to select.",C_DIM); return
+        _scene_select(roots)
+
+func _scene_undo_delete(pairs:Array, action:String)->void:
+        ## Undoable delete: DO detaches the placed root + its collision
+        ## sibling, UNDO re-attaches them. Nodes are handed over as do
+        ## references, so the standard reference-safe undo dance applies
+        ## (same machinery as placement undo, inverted).
+        var ep:EditorPlugin=null
+        if is_instance_valid(placer): ep=placer.get("editor_plugin") as EditorPlugin
+        if ep==null:
+                for rec in pairs:
+                        var pr:Node=(rec as Dictionary)["pr"]
+                        if is_instance_valid(pr): pr.queue_free()
+                _scene_rescan(); return
+        var ur:=ep.get_undo_redo()
+        var sr:=EditorInterface.get_edited_scene_root()
+        if sr!=null: ur.create_action(action,0,sr)
+        else: ur.create_action(action)
+        for rec in pairs:
+                var pr2:Node=(rec as Dictionary)["pr"]
+                if not is_instance_valid(pr2): continue
+                ur.add_do_method(placer,"_place_detach_pair",pr2,(rec as Dictionary)["col"])
+                ur.add_undo_method(placer,"_place_attach_pair",pr2,(rec as Dictionary)["col"],(rec as Dictionary)["par"])
+                ur.add_do_reference(pr2)
+                var col:Node=(rec as Dictionary)["col"]
+                if is_instance_valid(col): ur.add_do_reference(col)
+        # Default commit (execute=true) — unlike the placement actions (whose
+        # "do" half already happened by hand), here the DO methods ARE the
+        # operation and must run at commit time.
+        ur.commit_action()
+
+func _scene_delete(targets:Variant, as_pairs:bool)->void:
+        if as_pairs:
+                var pairs:Array=targets as Array
+                var valid:int=0
+                for rec in pairs:
+                        if is_instance_valid((rec as Dictionary)["pr"]): valid+=1
+                if valid==0: return
+                _scene_undo_delete(pairs,"UAP: Delete Placed Asset")
+                set_status("Deleted placed asset (undo with Ctrl+Z).",C_OK)
+        else:
+                var nodes:Array=targets as Array
+                var recs:Array=[]
+                for n in nodes:
+                        if not is_instance_valid(n): continue
+                        var par:Node=n.get_parent()
+                        recs.append({"pr":n,"col":null,"par":par})
+                if recs.is_empty(): return
+                _scene_undo_delete(recs,"UAP: Delete "+String((recs[0] as Dictionary)["pr"].name))
+                set_status("Deleted (undo with Ctrl+Z).",C_OK)
+        _scene_rescan()
+
+func _build_scene_tab()->void:
+        var vb:=_make_tab("Scene","tab_scene")
+        var m:=_section(vb,"Placed Assets")
+        _info(m,"Everything this plugin placed in the edited scene, grouped by source asset. MultiMesh paint sets and spline bakes are listed separately. Hit Refresh after editing placed nodes by hand.")
+        var ar:=HBoxContainer.new(); ar.add_theme_constant_override("separation",4); m.add_child(ar)
+        var rb:=Button.new(); rb.text="Refresh"
+        rb.tooltip_text="Rescan the edited scene."
+        rb.pressed.connect(_scene_rescan); ar.add_child(rb)
+        var sab:=Button.new(); sab.text="Select All Placed"
+        sab.tooltip_text="Select every placed asset root at once."
+        sab.pressed.connect(_scene_select_all); ar.add_child(sab)
+        var dab:=Button.new(); dab.text="Delete All Placed"
+        dab.tooltip_text="Delete every placed asset root (one undo step).\nMultiMesh sets and spline bakes are untouched."
+        dab.pressed.connect(_scene_delete_all); ar.add_child(dab)
+        _style_idle_button(rb); _style_idle_button(sab); _style_raised_button(dab,C_BTN_DANGER)
+        _scene_summary_lbl=_lbl("",C_DIM); m.add_child(_scene_summary_lbl)
+        _scene_rows_vbox=VBoxContainer.new()
+        _scene_rows_vbox.size_flags_horizontal=SIZE_EXPAND_FILL
+        _scene_rows_vbox.add_theme_constant_override("separation",2)
+        m.add_child(_scene_rows_vbox)
+        _scene_rescan()
+
+func _scene_delete_all()->void:
+        var pairs:Array=[]
+        for r in _scene_collect():
+                var row:=r as SceneRow
+                if row.kind=="asset": pairs.append_array(row.pairs)
+        var valid:int=0
+        for rec in pairs:
+                if is_instance_valid((rec as Dictionary)["pr"]): valid+=1
+        if valid==0:
+                set_status("No placed assets to delete.",C_DIM); return
+        _scene_undo_delete(pairs,"UAP: Delete All Placed (%d)"%valid)
+        set_status("Deleted %d placed asset(s) in one undo step."%valid,C_OK)
+        _scene_rescan()
+
+
+# ─── Presets Tab: save / apply / delete placement settings ───────────────────
+var _preset_name_edit:LineEdit=null
+var _preset_rows_vbox:VBoxContainer=null
+
+## Every placement-relevant setting a preset captures. Browser state
+## (folder, groups, favorites), shortcuts and the parent node reference are
+## deliberately excluded — presets are about HOW you place, not WHERE.
+const PRESET_KEYS: Array[String] = [
+        "place_mode","grid_enabled","grid_size","grid_height","height_offset","height_snap",
+        "show_grid","grid_view_dist","grid_follow",
+        "x_grid_enabled","x_grid_size","x_grid_pos","x_grid_cy","x_grid_follow",
+        "z_grid_enabled","z_grid_size","z_grid_pos","z_grid_cy","z_grid_follow",
+        "align_to_normal","vertex_snap_mesh","vertex_snap_strength",
+        "rotation_snap_mode","custom_snap_deg",
+        "random_rot","rrot_min","rrot_max","random_tilt","rtilt_max",
+        "uniform_scale","place_scale_all","place_scale_x","place_scale_y","place_scale_z",
+        "random_scale","rscale_min","rscale_max",
+        "paint_mode","paint_spacing","paint_scatter","scatter_radius",
+        "paint_as_brush","brush_radius","brush_density","brush_falloff","brush_texture_path",
+        "random_group_place","unpack_scenes","multimesh_mode","mm_collision_enabled",
+        "collision_enabled","collision_body_type","collision_shape_type","collision_auto_unpack",
+        "material_override_enabled","material_override_path","material_override_mode",
+        "slope_filter_enabled","slope_max_deg","height_filter_enabled","height_filter_min","height_filter_max",
+        "mirror_enabled","mirror_axis","mirror_offset","seed_lock","seed_value",
+]
+
+func _build_presets_tab()->void:
+        var vb:=_make_tab("Presets","tab_presets")
+        var sv:=_section(vb,"Save Preset")
+        _info(sv,"Capture every placement setting — mode, grid, transforms, paint, brush, collision, material, surface filters, mirror and seed — under a name. Perfect for switching between e.g. \"Forest floor scatter\" and \"Wall props\" mid-build.")
+        var hr:=HBoxContainer.new(); hr.add_theme_constant_override("separation",4); sv.add_child(hr)
+        _preset_name_edit=LineEdit.new(); _preset_name_edit.placeholder_text="Preset name..."
+        _preset_name_edit.size_flags_horizontal=SIZE_EXPAND_FILL
+        _preset_name_edit.text_submitted.connect(func(_t:String): _on_preset_save())
+        hr.add_child(_preset_name_edit)
+        var sb:=Button.new(); sb.text="Save Preset"
+        sb.tooltip_text="Save a new preset, or overwrite the one with this name."
+        sb.pressed.connect(_on_preset_save); hr.add_child(sb)
+        _style_raised_button(sb,C_BTN_ACTION)
+        var ls:=_section(vb,"Saved Presets")
+        _preset_rows_vbox=VBoxContainer.new()
+        _preset_rows_vbox.size_flags_horizontal=SIZE_EXPAND_FILL
+        _preset_rows_vbox.add_theme_constant_override("separation",2)
+        ls.add_child(_preset_rows_vbox)
+        _rebuild_preset_rows()
+
+func _rebuild_preset_rows()->void:
+        if not is_instance_valid(_preset_rows_vbox): return
+        # Detach first, then queue_free: rebuild can run from a row button's
+        # own pressed signal, where an immediate free() would hit a lock.
+        for c in _preset_rows_vbox.get_children():
+                _preset_rows_vbox.remove_child(c); c.queue_free()
+        if _presets.is_empty():
+                var empty:=_lbl("No presets yet — set the panel up, type a name above and Save.",C_DIM)
+                _preset_rows_vbox.add_child(empty)
+                return
+        for i in _presets.size():
+                var idx:=i
+                var name:=str((_presets[idx] as Dictionary)["name"])
+                var hb:=HBoxContainer.new(); hb.add_theme_constant_override("separation",4)
+                hb.size_flags_horizontal=SIZE_EXPAND_FILL
+                var nl:=Label.new(); nl.text=name
+                nl.size_flags_horizontal=SIZE_EXPAND_FILL; nl.clip_text=true
+                nl.add_theme_color_override("font_color",C_HEAD); hb.add_child(nl)
+                var ab:=Button.new(); ab.text="Apply"
+                ab.tooltip_text="Apply preset '%s' (Ctrl+Z does NOT revert settings — current values are replaced)."%name
+                ab.pressed.connect(_on_preset_apply.bind(idx)); hb.add_child(ab)
+                var db:=Button.new(); db.text="X"
+                db.tooltip_text="Delete preset '%s'."%name
+                db.pressed.connect(_on_preset_delete.bind(idx)); hb.add_child(db)
+                _style_idle_button(ab); _style_idle_button(db)
+                _preset_rows_vbox.add_child(hb)
+
+func _on_preset_save()->void:
+        if not is_instance_valid(_preset_name_edit): return
+        var pname:=_preset_name_edit.text.strip_edges()
+        if pname.is_empty():
+                set_status("Type a preset name first.",C_WARN); return
+        for p in _presets:
+                if str((p as Dictionary)["name"])==pname:
+                        (p as Dictionary)["data"]=_preset_capture()
+                        _save_config(); _rebuild_preset_rows()
+                        set_status("Preset '%s' overwritten."%pname,C_OK)
+                        return
+        _presets.append({"name":pname,"data":_preset_capture()})
+        _save_config(); _rebuild_preset_rows()
+        set_status("Preset '%s' saved."%pname,C_OK)
+
+func _preset_capture()->Dictionary:
+        var d:=Dictionary()
+        for k in PRESET_KEYS: d[k]=get(k)
+        return d
+
+func _on_preset_apply(idx:int)->void:
+        if idx<0 or idx>=_presets.size(): return
+        var data:Dictionary=(_presets[idx] as Dictionary)["data"]
+        for k in data:
+                if PRESET_KEYS.has(k): set(k,data[k])
+        # Spline mode (4) depends on a live spline tool reference that a
+        # preset cannot restore — fall back to Grid, exactly like _load_config.
+        if int(place_mode)==4: place_mode=1
+        _prev_place_mode=place_mode
+        # Derived mirror pair: rtilt_min always shadows rtilt_max.
+        rtilt_min=-rtilt_max
+        _save_config()
+        if is_instance_valid(placer):
+                placer.call("rebuild_grid"); placer.call("refresh_ghosts")
+        set_status("Preset applied: %s."%str((_presets[idx] as Dictionary)["name"]),C_OK)
+        # Deferred: the apply button lives inside the settings UI being
+        # replaced — freeing it mid-signal would be a use-after-free.
+        _rebuild_settings_ui.call_deferred()
+
+func _on_preset_delete(idx:int)->void:
+        if idx<0 or idx>=_presets.size(): return
+        var pname:=str((_presets[idx] as Dictionary)["name"])
+        _presets.remove_at(idx)
+        _save_config(); _rebuild_preset_rows()
+        set_status("Preset '%s' deleted."%pname,C_WARN)
+
+func _rebuild_settings_ui()->void:
+        ## Rebuilds the whole settings side (mode bar + tab rail + pages) so
+        ## every control reflects current state after a preset apply. All
+        ## builder functions assign the shared UI-ref members, so a fresh
+        ## build is always consistent.
+        if not is_instance_valid(settings_ui): return
+        for c in settings_ui.get_children():
+                settings_ui.remove_child(c); (c as Node).free()
+        _mode_buttons.clear(); _scroll_buttons.clear(); _rail_buttons.clear()
+        # Force _update_phys_ui() to re-dress the fresh physics buttons on
+        # its next tick (it diffs against this cached state otherwise).
+        _phys_last_state = -1
+        _build_mode_bar(settings_ui)
+        settings_ui.add_child(_sep())
+        _build_settings_panel(settings_ui)
+        _apply_uap_theme(settings_ui)

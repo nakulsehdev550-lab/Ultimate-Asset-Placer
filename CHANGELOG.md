@@ -1,3 +1,64 @@
+## v2.5.3 — six new pro features
+
+#### Placement Presets (new Presets tab)
+- Save the entire placement setup under a name: mode, grid & snapping, grid
+  height, height offset, rotation snap, random rotation/tilt/scale ranges,
+  scale, paint, brush, collision, material override, surface filters, mirror
+  placement and the random seed.
+- Apply swaps the whole panel in one click (the UI rebuilds to match);
+  saving with an existing name overwrites; presets persist in the plugin
+  config.
+- Browser folders, groups, favorites, shortcuts and the parent-node
+  reference are deliberately not captured — presets are about HOW you
+  place, not what you browse.
+
+#### Scene Manager (new Scene tab)
+- Live census of everything the plugin placed in the edited scene: asset
+  instances grouped by source asset with counts, uncommitted MultiMesh
+  paint sets with instance counts, and spline bakes.
+- Per-row Select / Delete, plus Select All Placed and Delete All Placed —
+  deletions are reference-safe undo actions (Ctrl+Z restores everything,
+  including the auto-generated collision siblings).
+- Placement identification uses an internal meta tag plus the established
+  naming conventions, so hand-renamed assets are still tracked.
+
+#### Surface Filters (Place tab)
+- Max Slope: blocks placement where the surface tilts more than N degrees
+  from world up.
+- Height Range: only places between Min Y and Max Y.
+- Enforced in Surface mode, drag-painting, the volumetric brush and
+  MultiMesh painting; the ghost (and brush ring) turns red where the hit is
+  out of range, and rejected stamps show a throttled status note.
+
+#### Mirror Placement (Transform tab)
+- Every placement also spawns a mirrored twin across a world plane:
+  X (YZ plane at Offset X) or Z (XY plane at Offset Z).
+- Twin transforms are the exact conjugated mirrors: position, surface
+  normal, yaw/roll (surface-aligned twins included), so pairs read truly
+  symmetric. Works for clicks, paint stamps, brush deposits and MultiMesh
+  instances; the twin joins the same undo step as its original.
+
+#### Random Seed (Transform tab)
+- Lock Seed re-seeds the placer's RNG at the start of every stroke (clicks,
+  paint strokes, brush strokes and MultiMesh strokes), making random
+  rotation/tilt/scale, scatter offsets and brush deposits reproducible.
+- Reshuffle rolls a fresh seed; unlock returns to per-stroke randomization.
+
+#### Recent Assets (browser)
+- The last eight placed assets stay as one-click chips above the browser,
+  persisted across sessions; clicking a chip re-activates that asset even
+  if the current filter hides its card.
+
+#### Hardening found while testing
+- Brush + MultiMesh combined strokes now snapshot correctly (previously the
+  undo snapshot could come from an older stroke).
+- Cancelling a placement (RMB/ESC) commits an in-flight MultiMesh stroke as
+  one undo step instead of discarding it.
+- MultiMesh stroke undo actions now live in the scene's undo history.
+- Undo → redo no longer loses the material override on placed assets
+  (override slots are backed up on detach and restored on re-attach).
+- Ghost preview validity now matches the commit gate's height-offset math.
+
 ## v2.5.2 — deep polish release (35+ fixes)
 
 #### Undo reliability

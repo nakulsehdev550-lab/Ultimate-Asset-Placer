@@ -72,6 +72,16 @@ static func get_chapters() -> Array:
                 "text": KEYS,
         })
         chapters.append({
+                "title": "Scene Tab",
+                "icon": "tab_scene",
+                "text": SCENE,
+        })
+        chapters.append({
+                "title": "Presets Tab",
+                "icon": "tab_presets",
+                "text": PRESETS,
+        })
+        chapters.append({
                 "title": "Workflow Examples",
                 "icon": "sec_workflow",
                 "text": WORKFLOWS,
@@ -158,6 +168,13 @@ Adds a fixed vertical offset to every placed asset. Use positive values to float
 [b]Mesh Vertex Snap[/b]  — (Vertex mode) Tests actual geometry vertices instead of bounding-box corners.
 [b]Magnet px[/b]  — (Vertex mode) Snap trigger distance in screen pixels. Default: 42.
 
+[color=#46a0f5][b]Surface Filters[/b][/color]
+Keep stamps off ground that doesn't make sense — no trees on cliffs, no grass underwater.
+[b]Max Slope[/b]  — Blocks placement where the surface tilts more than this angle from world up. The ghost turns red while the surface under the cursor is too steep.
+[b]Height Range[/b]  — Only places between Min Y and Max Y (world height of the hit point).
+
+Filters apply to Surface mode, brush stamps and MultiMesh stamps; out-of-range stamps are skipped with a status note.
+
 [color=#46a0f5][b]Format Filter[/b][/color]
 Chips for each supported format: [b]GLB, GLTF, FBX, OBJ, DAE, BLEND, TSCN, SCN, RES, MESH[/b]. Lit chip = included in scan. Changing any filter triggers a re-scan automatically.
 
@@ -230,6 +247,12 @@ Quick buttons at the top of the Scale section: [b]x0.25  x0.5  x1  x1.5  x2  x3 
 [b]Flip X key (G)[/b]  — Mirrors the ghost on X by making the X scale negative.
 [b]Flip Z key (B)[/b]  — Mirrors the ghost on Z.
 [b]Scale Up / Down keys (] / [)[/b]  — Nudge scale ±0.1 per press. Hold Shift for fine ±0.025 steps.
+
+[color=#46a0f5][b]Mirror Placement[/b][/color]
+Every placement also spawns a mirrored twin across a world plane: [b]X[/b] mirrors across the YZ plane at Offset X, [b]Z[/b] mirrors across the XY plane at Offset Z. Yaw and roll are reflected, so pairs read genuinely symmetric — walls of props, twin towers, symmetric arenas. Works for clicks, paint strokes, the brush and MultiMesh painting, and the twin joins the same undo step.
+
+[color=#46a0f5][b]Random Seed[/b][/color]
+Lock the seed and every random decision (rotation, tilt, scale, scatter, brush deposits) becomes reproducible: the same stroke re-painted with the same seed yields the same layout. [b]Reshuffle[/b] rolls a fresh seed; unlock for pure randomness again.
 
 [color=#46a0f5][b]Random Scale[/b][/color]
 Multiplies each placed asset's scale by a random value in the Min–Max range.
@@ -777,3 +800,36 @@ The active choice — [b]including Off[/b] — is always highlighted with the bl
 [b]Height[/b]  — Scroll to raise or lower the Height Offset.
 
 """ + _info("Alt + Scroll Wheel always adjusts Height Offset, regardless of the Scroll Mode setting.")
+
+
+static var SCENE: String = _h("tab_scene", "SCENE TAB — PLACED ASSETS") + """
+
+[color=#46a0f5][b]Placed Assets[/b][/color]
+A live census of everything this plugin placed in the currently edited scene, so you never lose track of scattered objects again.
+
+Asset instances are grouped by their source asset (each row shows the total count) and can be [b]Select[/b]ed or [b]Del[/b]eted individually. Deleting is undoable with Ctrl+Z — the whole group comes back in one step.
+
+[color=#46a0f5][b]MultiMesh paint sets and spline bakes[/b][/color]
+Uncommitted MultiMesh paint sets are listed with their instance counts, and spline bakes (from the Spline tab) appear as their own rows. Each can be selected or deleted from here too — committed MultiMesh meshes belong to you and are no longer tracked.
+
+[color=#46a0f5][b]Bulk actions[/b][/color]
+[b]Select All Placed[/b]  — selects every placed asset root at once, handy for moving a whole scatter into a group node.
+[b]Delete All Placed[/b]  — deletes every placed asset root in a single undo step. MultiMesh sets and spline bakes are deliberately untouched.
+
+""" + _info("The list rebuilds every time you open the tab, or press Refresh after hand-editing placed nodes in the tree.")
+
+static var PRESETS: String = _h("tab_presets", "PRESETS TAB — SAVED SETTINGS") + """
+
+[color=#46a0f5][b]Save Preset[/b][/color]
+Captures every placement setting under a name: mode, grid and snapping, height offset, transform values, random rotation/tilt/scale, paint and brush options, collision, material override, surface filters, mirror placement and the random seed. Browser folders, groups, favorites and shortcuts are deliberately NOT part of a preset — presets are about HOW you place, not what you browse.
+
+Saving with an existing name overwrites that preset, so you can keep tuning and re-save.
+
+[color=#46a0f5][b]Apply[/b][/color]
+One click swaps the whole panel to the stored values (the UI rebuilds to match). Combined with the seed lock this also reproduces exact scatter layouts: apply a preset, paint, undo, re-paint — same result.
+
+[color=#46a0f5][b]Delete[/b][/color]
+Removes the preset. Presets are stored in the plugin config and survive editor restarts.
+
+""" + _info("Example: save \"Forest floor\" (Surface mode, slope filter 35°, random tilt, seed locked) and \"Wall props\" (X wall grid, mirror ON) and switch between them mid-build.")
+

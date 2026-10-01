@@ -7,6 +7,14 @@ enum ScrollMode { OFF = 0, SCALE = 1, ROT_Y = 2, ROT_X = 3, ROT_Z = 4, HEIGHT = 
 const GHOST_ALPHA     := 0.42
 const GRID_LINES      := 80
 const GHOST_COLOR     := Color(0.35, 0.65, 1.00, GHOST_ALPHA)
+## Rejected-position ghost tint (surface filters active, hit out of range).
+const GHOST_COLOR_BAD := Color(1.00, 0.30, 0.22, GHOST_ALPHA)
+## Throttle for the "stamp skipped" status toast so a drag across invalid
+## ground does not spam the status bar every frame.
+const FILTER_TOAST_INTERVAL_MSEC := 900
+## Meta tag set on every placed root (and its _Collision sibling) so the
+## Scene tab can identify plugin-created nodes without relying on names.
+const PLACED_META := "uap_placed"
 const HOLD_DELAY      := 0.35
 const HOLD_RATE_SLOW  := 0.12
 const HOLD_RATE_FAST  := 0.022
@@ -43,6 +51,19 @@ var _surface_normal: Vector3 = Vector3.UP
 var _rot_x: float = 0.0; var _rot_y: float = 0.0; var _rot_z: float = 0.0
 var _flip_x: bool = false; var _flip_z: bool = false
 var _held_keys: Dictionary = {}
+
+## Randomness source for placement. With the panel's seed lock ON the
+## generator is re-seeded at the start of every stroke, so a whole stroke
+## (or a single click) is reproducible bit-for-bit from the seed value;
+## reshuffling changes the seed and therefore the layout. Unlocked, it is
+## randomized per stroke as before.
+var _rng := RandomNumberGenerator.new()
+## One shared ghost material: recoloring validity is then a two-property
+## write instead of a full mesh-tree traversal per mouse move.
+var _ghost_mat: StandardMaterial3D = null
+var _brush_ring_mat: StandardMaterial3D = null
+var _ghost_valid: bool = true
+var _last_filter_toast_msec: int = -10000
 
 var _mm_instances:  Dictionary = {}
 var _mm_transforms: Dictionary = {}
@@ -98,11 +119,13 @@ func start_placement(path: String) -> void:
                 _rot_x = 0.0; _rot_y = 0.0; _rot_z = 0.0
                 _flip_x = false; _flip_z = false; _ensure_node3d_selected()
         
-        _refresh_ghosts()
+        if is_instance_valid(panel): panel.call("_push_recent", path)
+        refresh_ghosts()
         rebuild_grid()
         if is_instance_valid(panel): panel.call("update_rot_display", _rot_x, _rot_y, _rot_z)
 
 func refresh_ghosts() -> void:
+        _set_ghost_valid(true)
         _refresh_ghosts()
 
 func _refresh_ghosts() -> void:
@@ -138,6 +161,7 @@ func cancel_placement() -> void:
         # Commit (not discard) any in-flight stroke: the stamps already exist
         # in the scene, so they must stay undoable.
         _stroke_end(true)
+        if _mm_stroke_had_paint: _mm_stroke_end()
         _mm_stroke_had_paint = false; _mm_stroke_snapshot.clear()
         _brush_painting = false
         _brush_stroke_rids.clear()
@@ -269,6 +293,10 @@ func handle_input(camera: Camera3D, event: InputEvent) -> bool:
                                         _brush_painting = true
                                         _last_brush_paint_msec = 0
                                         _stroke_begin()
+                                        # Brush stamps can land in MultiMesh
+                                        # sets — open the mm snapshot window
+                                        # so the stroke commits its deltas.
+                                        if _get_bool("multimesh_mode"): _mm_stroke_begin()
                                 else:
                                         if _get_bool("multimesh_mode"): _mm_stroke_begin()
                                         else: _stroke_begin()
@@ -562,11 +590,20 @@ func _remove_ghost() -> void:
 func _move_ghost(world_pos: Vector3) -> void:
         if _get_bool("paint_mode") and _get_bool("paint_as_brush"):
                 _brush_pos = world_pos
+                # The brush hits real surfaces too — preview filter validity
+                # with the same rule the commit path will enforce.
+                if _filters_active():
+                        var norm := _surface_normal.normalized()
+                        if norm.length_squared() < 0.5: norm = Vector3.UP
+                        _set_ghost_valid(_surface_ok(world_pos + norm * _get_float("height_offset"), norm))
+                else: _set_ghost_valid(true)
                 _update_brush_ghost_pos(world_pos)
                 return
         
         var mode := _get_int("place_mode")
-        if mode == PlaceMode.SPLINE: return
+        if mode == PlaceMode.SPLINE:
+                _set_ghost_valid(true)
+                return
         if not is_instance_valid(_ghost): return
         
         var ho := _get_float("height_offset"); var gy := _get_float("grid_height")
@@ -575,6 +612,9 @@ func _move_ghost(world_pos: Vector3) -> void:
         if mode == PlaceMode.SURFACE:
                 var norm := _surface_normal.normalized()
                 if norm.length_squared() < 0.5: norm = Vector3.UP
+                # Match the commit gate: it tests the hit point AFTER the
+                # height offset is applied along the normal.
+                _set_ghost_valid(true if not _filters_active() else _surface_ok(world_pos + norm * _get_float("height_offset"), norm))
                 var fb := _build_surface_basis(norm)
                 # Push the ghost out of the surface along the normal — deepest
                 # AABB corner across ALL ghost meshes, matching the commit path.
@@ -595,7 +635,10 @@ func _move_ghost(world_pos: Vector3) -> void:
                 # the floor plane. Only the floor branch clamps.
                 if _last_hit_kind == GridPlane.FLOOR: final_pos.y = maxf(world_pos.y, gy) + ho
                 else: final_pos.y = world_pos.y + ho
-        else: final_pos.y = world_pos.y + ho
+                _set_ghost_valid(true)
+        else:
+                final_pos.y = world_pos.y + ho
+                _set_ghost_valid(true)
         
         _ghost.global_position = final_pos; _apply_ghost_transform()
 
@@ -632,21 +675,25 @@ func _colorize_ghost(node: Node) -> void:
                 var mi := node as MeshInstance3D
                 if mi.mesh == null: pass
                 else:
-                        var mat := StandardMaterial3D.new()
-                        mat.albedo_color          = GHOST_COLOR
-                        mat.transparency          = BaseMaterial3D.TRANSPARENCY_ALPHA
-                        mat.shading_mode          = BaseMaterial3D.SHADING_MODE_UNSHADED
-                        mat.cull_mode             = BaseMaterial3D.CULL_DISABLED
-                        mat.render_priority       = 1
-                        mat.flags_no_depth_test   = true
-                        # Neon glow emission on ghost objects
-                        mat.emission_enabled      = true
-                        mat.emission              = Color(0.35, 0.65, 1.00, 1.0)
-                        mat.emission_energy_multiplier = 1.8
+                        # One material shared by every mesh in the ghost —
+                        # _set_ghost_valid() then recolors the whole preview
+                        # with two property writes.
+                        if _ghost_mat == null:
+                                _ghost_mat = StandardMaterial3D.new()
+                                _ghost_mat.albedo_color          = GHOST_COLOR
+                                _ghost_mat.transparency          = BaseMaterial3D.TRANSPARENCY_ALPHA
+                                _ghost_mat.shading_mode          = BaseMaterial3D.SHADING_MODE_UNSHADED
+                                _ghost_mat.cull_mode             = BaseMaterial3D.CULL_DISABLED
+                                _ghost_mat.render_priority       = 1
+                                _ghost_mat.flags_no_depth_test   = true
+                                # Neon glow emission on ghost objects
+                                _ghost_mat.emission_enabled      = true
+                                _ghost_mat.emission              = Color(0.35, 0.65, 1.00, 1.0)
+                                _ghost_mat.emission_energy_multiplier = 1.8
                         var sc := mi.get_surface_override_material_count()
-                        if sc == 0: mi.material_override = mat
+                        if sc == 0: mi.material_override = _ghost_mat
                         else:
-                                for i in sc: mi.set_surface_override_material(i, mat)
+                                for i in sc: mi.set_surface_override_material(i, _ghost_mat)
         for c in node.get_children(): _colorize_ghost(c)
 
 ## Wipes every material OVERRIDE slot on a node tree (material_override,
@@ -865,8 +912,6 @@ func _commit_place(world_pos: Vector3) -> void:
         if not ResourceLoader.exists(place_path): return
         var res := ResourceLoader.load(place_path, "", ResourceLoader.CACHE_MODE_REUSE)
         if res == null: return
-        var node := _instantiate_resource(res); if node == null: return
-        node.name = place_path.get_file().get_basename()
 
         var parent := _resolve_parent(root)
         var gy := _get_float("grid_height"); var ho := _get_float("height_offset")
@@ -885,19 +930,26 @@ func _commit_place(world_pos: Vector3) -> void:
                 # Scatter ALONG the active grid plane's two axes so stamps on a
                 # wall grid never drift off their wall (third axis stays locked).
                 if mode == PlaceMode.GRID and _last_hit_kind == GridPlane.XWALL:
-                        pos.x += randf_range(-r,r); pos.y += randf_range(-r,r)
+                        pos.x += _randf_range(-r,r); pos.y += _randf_range(-r,r)
                 elif mode == PlaceMode.GRID and _last_hit_kind == GridPlane.ZWALL:
-                        pos.z += randf_range(-r,r); pos.y += randf_range(-r,r)
+                        pos.z += _randf_range(-r,r); pos.y += _randf_range(-r,r)
                 else:
-                        pos.x += randf_range(-r,r); pos.z += randf_range(-r,r)
+                        pos.x += _randf_range(-r,r); pos.z += _randf_range(-r,r)
+
+        # Surface filters (slope / height range) gate surface-based placement.
+        # Brush stamps already carry their own hit normal in _surface_normal;
+        # plane-based modes have no meaningful normal and are never gated.
+        var is_brush := _get_bool("paint_mode") and _get_bool("paint_as_brush")
+        if (mode == PlaceMode.SURFACE or is_brush) and not _surface_ok(pos, norm):
+                _toast_filter_skip(); return
 
         var rx := _rot_x; var ry := _rot_y; var rz := _rot_z
-        if _get_bool("random_rot"):   ry = randf_range(_get_float("rrot_min"), _get_float("rrot_max"))
+        if _get_bool("random_rot"):   ry = _randf_range(_get_float("rrot_min"), _get_float("rrot_max"))
         if _get_bool("random_tilt"):
-                rx += randf_range(_get_float("rtilt_min"), _get_float("rtilt_max"))
-                rz += randf_range(_get_float("rtilt_min"), _get_float("rtilt_max"))
+                rx += _randf_range(_get_float("rtilt_min"), _get_float("rtilt_max"))
+                rz += _randf_range(_get_float("rtilt_min"), _get_float("rtilt_max"))
         var scl := _get_effective_scale()
-        if _get_bool("random_scale"): scl *= randf_range(_get_float("rscale_min"), _get_float("rscale_max"))
+        if _get_bool("random_scale"): scl *= _randf_range(_get_float("rscale_min"), _get_float("rscale_max"))
 
         var align_normal := mode == PlaceMode.SURFACE and _get_bool("align_to_normal")
         var sc  := bool(panel.get("collision_enabled"))     if is_instance_valid(panel) else false
@@ -909,18 +961,48 @@ func _commit_place(world_pos: Vector3) -> void:
         var unpack_scenes := bool(panel.get("unpack_scenes")) if is_instance_valid(panel) else false
         var dname := place_path.get_file().get_basename()
 
+        var node := _instantiate_resource(res); if node == null: return
+        node.name = place_path.get_file().get_basename()
+        var records: Array = []
         if editor_plugin != null:
-                var ur := editor_plugin.get_undo_redo()
                 _do_place(node, parent, pos, rx, ry, rz, scl, align_normal, norm, sc, cbt, cst, cu, me, mp2, unpack_scenes, place_path, dname, mode == PlaceMode.SURFACE)
-                var rec := _placement_record(node, parent)
+                records.append(_placement_record(node, parent))
+        else:
+                _do_place(node, parent, pos, rx, ry, rz, scl, align_normal, norm, sc, cbt, cst, cu, me, mp2, unpack_scenes, place_path, dname, mode == PlaceMode.SURFACE)
+
+        # Mirror twin: a second instance reflected across the configured world
+        # plane. Inputs are mirrored BEFORE placement (position, normal and the
+        # euler triple), so the surface push, normal alignment and collision
+        # spawning all run through the regular pipeline and the twin lands as
+        # the exact conjugated mirror of the original. Same record list — the
+        # pair is one undo step (or two entries inside one stroke action).
+        if _get_bool("mirror_enabled") and mode != PlaceMode.SPLINE:
+                var mnode := _instantiate_resource(res)
+                if mnode != null:
+                        mnode.name = place_path.get_file().get_basename()
+                        var m_pos := _mirror_point(pos)
+                        var m_norm := _mirror_vector(norm).normalized()
+                        var m_rot := _mirror_rot(rx, ry, rz)
+                        _do_place(mnode, parent, m_pos, m_rot.x, m_rot.y, m_rot.z, scl, align_normal, m_norm, sc, cbt, cst, cu, me, mp2, unpack_scenes, place_path, dname, mode == PlaceMode.SURFACE)
+                        if editor_plugin != null:
+                                records.append(_placement_record(mnode, parent))
+
+        if editor_plugin != null and not records.is_empty():
                 if _stroke_active:
                         # Part of a paint stroke: collect and commit the whole
                         # stroke as one undo action on mouse release.
-                        _stroke_roots.append(rec)
+                        _stroke_roots.append_array(records)
                 else:
-                        _commit_placement_action(ur, "UAP: Place " + dname, [rec])
-        else:
-                _do_place(node, parent, pos, rx, ry, rz, scl, align_normal, norm, sc, cbt, cst, cu, me, mp2, unpack_scenes, place_path, dname, mode == PlaceMode.SURFACE)
+                        var paired: bool = records.size() > 1
+                        _commit_placement_action(editor_plugin.get_undo_redo(),
+                                "UAP: Place " + dname + (" (mirrored pair)" if paired else ""), records)
+                        # Click-placements end with the ORIGINAL selected — the
+                        # twin belongs to it, and the next rot/scale nudge is
+                        # expected to address the clicked object.
+                        var first_root: Node3D = (records[0] as Dictionary).get("pr") as Node3D
+                        if is_instance_valid(first_root):
+                                EditorInterface.get_selection().clear()
+                                EditorInterface.get_selection().add_node(first_root)
 
 func _placement_record(node: Node3D, parent: Node3D) -> Dictionary:
         ## Snapshot of one placement for undo purposes: the placed root (the
@@ -964,12 +1046,39 @@ func _commit_placement_action(ur: EditorUndoRedoManager, action_name: String, re
                 if is_instance_valid(col): ur.add_do_reference(col)
         ur.commit_action(false)
 
+## Override-slot backups for detached placed roots, keyed by instance ID.
+## _place_detach_pair must strip override slots (godotengine/godot#85817:
+## freeing a detached tree that still holds shared-material overrides spams
+## renderer errors when the undo system releases the node), but a redo must
+## bring the user's material override back.
+var _override_slots_backup: Dictionary = {}
+
 func _place_detach_pair(pr: Node3D, col: Node) -> void:
         if is_instance_valid(col) and col.is_inside_tree():
                 col.get_parent().remove_child(col)
         if is_instance_valid(pr) and pr.is_inside_tree():
+                _override_slots_backup[pr.get_instance_id()] = _capture_override_slots(pr)
                 _clear_override_slots(pr)
                 pr.get_parent().remove_child(pr)
+
+## One entry per MeshInstance3D under the root, addressed by its relative
+## node path so multi-mesh roots (unpacked scenes) round-trip exactly.
+func _capture_override_slots(node: Node) -> Dictionary:
+        var slots: Array = []
+        var stack: Array = [[node, "."]]
+        while not stack.is_empty():
+                var entry: Array = stack.pop_back()
+                var n2: Node = entry[0]
+                if n2 is MeshInstance3D:
+                        var m2 := n2 as MeshInstance3D
+                        var surf: Array = []
+                        for i in m2.get_surface_override_material_count():
+                                surf.append(m2.get_surface_override_material(i))
+                        slots.append({"path": entry[1], "mat": m2.material_override,
+                                "overlay": m2.material_overlay, "surfaces": surf})
+                for c in n2.get_children():
+                        stack.append([c, entry[1] + "/" + String(c.name) if entry[1] != "." else "./" + String(c.name)])
+        return {"slots": slots}
 
 func _place_attach_pair(pr: Node3D, col: Node, par: Node) -> void:
         if not is_instance_valid(pr) or pr.is_inside_tree(): return
@@ -977,13 +1086,108 @@ func _place_attach_pair(pr: Node3D, col: Node, par: Node) -> void:
         if not is_instance_valid(p): p = EditorInterface.get_edited_scene_root()
         if not is_instance_valid(p): return
         p.add_child(pr)
+        var key := pr.get_instance_id()
+        if _override_slots_backup.has(key):
+                var d: Dictionary = _override_slots_backup[key]
+                _restore_override_slots(pr, d)
+                _override_slots_backup.erase(key)
         if is_instance_valid(col) and not col.is_inside_tree():
                 p.add_child(col)
+
+func _restore_override_slots(node: Node, d: Dictionary) -> void:
+        var slots: Array = d["slots"]
+        for s in slots:
+                var rec: Dictionary = s
+                var target: Node = node if (rec["path"] as String) == "." else node.get_node_or_null(rec["path"] as String)
+                if not is_instance_valid(target) or not target is MeshInstance3D: continue
+                var mi := target as MeshInstance3D
+                mi.material_override = rec["mat"] as Material
+                mi.material_overlay = rec["overlay"] as Material
+                var arr: Array = rec["surfaces"]
+                for i in arr.size():
+                        if i < mi.get_surface_override_material_count():
+                                mi.set_surface_override_material(i, arr[i] as Material)
 
 func _stroke_begin() -> void:
         if _stroke_active: return
         _stroke_active = true
         _stroke_roots.clear()
+        _begin_random_stream()
+
+func _begin_random_stream() -> void:
+        ## Called once per stroke (and per single click, which is a one-stamp
+        ## stroke) — the RNG stream therefore advances WITHIN a stroke but resets
+        ## between strokes while the seed lock is on, which is what makes locked
+        ## layouts reproducible.
+        if _get_bool("seed_lock"):
+                _rng.seed = int(_get_int("seed_value"))
+        else:
+                _rng.randomize()
+
+func _randf() -> float:
+        return _rng.randf() if _get_bool("seed_lock") else randf()
+
+func _randf_range(lo: float, hi: float) -> float:
+        return _rng.randf_range(lo, hi) if _get_bool("seed_lock") else randf_range(lo, hi)
+
+func _surface_ok(pos: Vector3, nrm: Vector3) -> bool:
+        ## Surface-filter gate: slope (normal vs world up) and world-Y range.
+        ## Only consulted for surface-based placement (Surface mode and the
+        ## brush); plane-based modes have no meaningful normal to test.
+        if _get_bool("slope_filter_enabled"):
+                var n := nrm.normalized() if nrm.length_squared() > 0.001 else Vector3.UP
+                var ang := rad_to_deg(acos(clampf(n.dot(Vector3.UP), -1.0, 1.0)))
+                if ang > _get_float("slope_max_deg"): return false
+        if _get_bool("height_filter_enabled"):
+                if pos.y < _get_float("height_filter_min") or pos.y > _get_float("height_filter_max"):
+                        return false
+        return true
+
+func _filters_active() -> bool:
+        return _get_bool("slope_filter_enabled") or _get_bool("height_filter_enabled")
+
+func _toast_filter_skip() -> void:
+        var now := Time.get_ticks_msec()
+        if now - _last_filter_toast_msec < FILTER_TOAST_INTERVAL_MSEC: return
+        _last_filter_toast_msec = now
+        if is_instance_valid(panel):
+                panel.call("set_status", "Stamp skipped — surface out of the slope/height filter range.", Color(1.0, 0.72, 0.18))
+
+func _mirror_is_x() -> bool:
+        return int(_get_int("mirror_axis")) == 0
+
+func _mirror_point(p: Vector3) -> Vector3:
+        var off := _get_float("mirror_offset")
+        if _mirror_is_x(): return Vector3(2.0 * off - p.x, p.y, p.z)
+        return Vector3(p.x, p.y, 2.0 * off - p.z)
+
+func _mirror_vector(v: Vector3) -> Vector3:
+        return Vector3(-v.x, v.y, v.z) if _mirror_is_x() else Vector3(v.x, v.y, -v.z)
+
+func _mirror_rot(rx: float, ry: float, rz: float) -> Vector3:
+        ## Conjugating a placement basis by the reflection plane maps
+        ## Ry(yaw)→Ry(-yaw) always, and negates exactly one of Rx/Rz — the axis
+        ## lying IN the mirror plane keeps its sign. (X plane: (rx,-ry,-rz);
+        ## Z plane: (-rx,-ry,rz).)
+        if _mirror_is_x(): return Vector3(rx, -ry, -rz)
+        return Vector3(-rx, -ry, rz)
+
+func _mirror_basis(b: Basis) -> Basis:
+        var m := Basis.from_scale(Vector3(-1, 1, 1)) if _mirror_is_x() else Basis.from_scale(Vector3(1, 1, -1))
+        return m * b * m
+
+func _set_ghost_valid(ok: bool) -> void:
+        if ok == _ghost_valid: return
+        _ghost_valid = ok
+        var c := GHOST_COLOR if ok else GHOST_COLOR_BAD
+        if is_instance_valid(_ghost_mat):
+                _ghost_mat.albedo_color = c
+                _ghost_mat.emission = Color(c.r, c.g, c.b, 1.0)
+        # The brush ring is the only preview in brush mode — tint it too.
+        if is_instance_valid(_brush_ring_mat):
+                var rc := Color(0.55, 0.25, 1.0, 0.75) if ok else GHOST_COLOR_BAD
+                _brush_ring_mat.albedo_color = rc
+                _brush_ring_mat.emission = Color(rc.r, rc.g, rc.b, 1.0)
 
 func _stroke_end(commit: bool) -> void:
         if not _stroke_active: return
@@ -1025,6 +1229,7 @@ func _do_place(node: Node3D, parent: Node3D, pos: Vector3,
                 base_name = "%s_%d" % [base_name, idx]
         node.name = base_name
         parent.add_child(node)
+        node.set_meta(PLACED_META, place_path)
         
         var root := EditorInterface.get_edited_scene_root()
         var is_packed_scene = node.scene_file_path != ""
@@ -1202,6 +1407,7 @@ func _reattach_node(node: Node, parent: Node) -> void:
         if is_instance_valid(par): par.add_child(node)
 
 func _mm_stroke_begin() -> void:
+        _begin_random_stream()
         _mm_stroke_snapshot.clear(); _mm_stroke_had_paint = false
         for path in _mm_transforms.keys():
                 _mm_stroke_snapshot[path] = (_mm_transforms[path] as Array).duplicate()
@@ -1212,7 +1418,7 @@ func _mm_stroke_end() -> void:
         if editor_plugin == null: return
         var ur := editor_plugin.get_undo_redo()
         if ur == null: return
-        ur.create_action("UAP: MultiMesh Paint Stroke")
+        _open_scene_undo_action(ur, "UAP: MultiMesh Paint Stroke")
         for path in _mm_transforms.keys():
                 var before: Array = _mm_stroke_snapshot.get(path, [])
                 var after: Array = _mm_transforms[path]
@@ -1319,18 +1525,24 @@ func _mm_paint(world_pos: Vector3) -> void:
         var ho := _get_float("height_offset"); var mode := _get_int("place_mode")
         var pos := world_pos
         if _get_bool("paint_scatter"):
-                var r := _get_float("scatter_radius"); pos.x += randf_range(-r,r); pos.z += randf_range(-r,r)
+                var r := _get_float("scatter_radius"); pos.x += _randf_range(-r,r); pos.z += _randf_range(-r,r)
         var norm := (_surface_normal if _surface_normal.length_squared()>0.1 else Vector3.UP).normalized()
         if mode == PlaceMode.SURFACE: pos = pos+norm*ho
         else: pos.y = pos.y+ho
 
+        # Surface filters apply to MultiMesh stamps exactly as to normal
+        # placement (brush stamps arrive here through _commit_place).
+        var is_brush := _get_bool("paint_mode") and _get_bool("paint_as_brush")
+        if (mode == PlaceMode.SURFACE or is_brush) and not _surface_ok(pos, norm):
+                _toast_filter_skip(); return
+
         var rx := _rot_x; var ry := _rot_y; var rz := _rot_z
-        if _get_bool("random_rot"):  ry = randf_range(_get_float("rrot_min"),_get_float("rrot_max"))
+        if _get_bool("random_rot"):  ry = _randf_range(_get_float("rrot_min"),_get_float("rrot_max"))
         if _get_bool("random_tilt"):
-                rx += randf_range(_get_float("rtilt_min"),_get_float("rtilt_max"))
-                rz += randf_range(_get_float("rtilt_min"),_get_float("rtilt_max"))
+                rx += _randf_range(_get_float("rtilt_min"),_get_float("rtilt_max"))
+                rz += _randf_range(_get_float("rtilt_min"),_get_float("rtilt_max"))
         var scl := _get_effective_scale()
-        if _get_bool("random_scale"): scl *= randf_range(_get_float("rscale_min"),_get_float("rscale_max"))
+        if _get_bool("random_scale"): scl *= _randf_range(_get_float("rscale_min"),_get_float("rscale_max"))
 
         var fb: Basis
         if mode == PlaceMode.SURFACE and _get_bool("align_to_normal"):
@@ -1343,6 +1555,11 @@ func _mm_paint(world_pos: Vector3) -> void:
 
         if not _mm_transforms.has(place_path): _mm_transforms[place_path] = []
         (_mm_transforms[place_path] as Array).append(xform)
+        # Mirror twin for MultiMesh stamps: conjugate the full instance basis
+        # by the reflection plane so surface-aligned stamps mirror correctly.
+        if _get_bool("mirror_enabled"):
+                var mx := Transform3D(_mirror_basis(xform.basis), _mirror_point(xform.origin))
+                (_mm_transforms[place_path] as Array).append(mx)
         _mm_stroke_had_paint = true
 
         var transforms: Array = _mm_transforms[place_path]
@@ -1565,6 +1782,7 @@ func _spawn_brush_ghost() -> void:
         mat.emission                   = Color(0.70, 0.30, 1.0, 1.0)
         mat.emission_energy_multiplier = 3.5
         mesh.surface_set_material(0, mat)
+        _brush_ring_mat = mat
         
         _brush_ghost = MeshInstance3D.new()
         _brush_ghost.name = "__UAP_BrushGhost__"
@@ -1643,11 +1861,11 @@ func _brush_paint(center: Vector3) -> void:
         t1 = t1.normalized()
         var t2 := plane_n.cross(t1).normalized()
         for _i in attempts:
-                var angle     := randf() * TAU
-                var radius    := sqrt(randf()) * _brush_radius
+                var angle     := _randf() * TAU
+                var radius    := sqrt(_randf()) * _brush_radius
                 var local_off := Vector2(cos(angle) * radius, sin(angle) * radius)
                 var prob      := _brush_mask_sample(local_off) * (expected / float(attempts))
-                if randf() > prob: continue
+                if _randf() > prob: continue
                 var world_pt  := center + t1 * local_off.x + t2 * local_off.y
                 var hit_pos   := world_pt
                 var hit_norm  := plane_n

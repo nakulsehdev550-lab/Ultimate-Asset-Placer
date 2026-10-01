@@ -2,7 +2,7 @@
 
 **Professional 3D asset placement tool for Godot 4.7+** — place, paint, scatter, spline, and physics-drop your assets with a fast, tactile editor UI. Optimised for thousands of assets.
 
-![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.5.2-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Godot 4.7](https://img.shields.io/badge/Godot-4.7%2B-478cbf) ![Version](https://img.shields.io/badge/version-2.5.3-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ![Ultimate Asset Placer in the Godot editor](screenshots/editor_overview.png)
 
@@ -14,11 +14,56 @@
 - **Paint & volumetric brush** — drag-paint, circular brush with density/falloff, and mask textures.
 - **MultiMesh painting** — thousands of instances in a single draw call.
 - **Advanced spline system** — scatter props along curves or deform meshes into roads/rivers; terrain snapping; bake to nodes or MultiMesh.
-- **Random transforms** — random rotation, tilt, and scale, per placement.
+- **Random transforms with a seed lock** — random rotation, tilt, and scale per placement; lock the seed for reproducible scatter layouts, reshuffle for a fresh roll.
+- **Mirror placement** — every stamp also places a mirrored twin across a world X/Z plane (clicks, paint, brush and MultiMesh included).
+- **Surface filters** — slope and height-range gates keep stamps off cliffs and out of water; the ghost turns red where placement is blocked.
+- **Placement presets** — save the whole panel (mode, grid, transforms, paint, collision, material, filters, mirror, seed) under a name and apply it in one click.
+- **Scene tab** — a live census of everything placed: per-asset counts, select/delete in bulk, all undoable.
+- **Recent assets bar** — the last assets you used stay one click away above the browser.
 - **Groups & Favorites** — organise assets into named collections, random group placement.
 - **Material override & auto collision** — Replace/Next-Pass materials, Static/Rigid/Character/Area bodies with five shape types.
 - **Physics tab** — lift, drop, tumble and settle existing scene objects inside the editor using your project's own physics engine (Jolt or Godot Physics).
 - **Asset Zoo** — lays out your whole library in a 3D grid for inspection.
+
+## What's new in v2.5.3 — six new pro features
+
+Every feature below is wired into the same tactile panel, undo system and
+config persistence you already know, and each one ships with full docs
+(two new chapters in the built-in docs window).
+
+- **Placement Presets (new Presets tab)** — capture the entire placement
+  setup — mode, grid & snapping, height, transforms, random ranges, paint &
+  brush options, collision, material override, surface filters, mirror and
+  seed — under a name. Apply mid-build to switch between e.g. "Forest floor
+  scatter" and "Wall props" instantly. Overwrite, apply and delete; presets
+  survive editor restarts.
+- **Scene Manager (new Scene tab)** — a live census of everything the plugin
+  placed in the edited scene: asset instances grouped by source with counts,
+  uncommitted MultiMesh paint sets, and spline bakes. Select or delete any
+  row, Select All Placed, or Delete All Placed as one undo step.
+- **Surface Filters** — Max Slope and Height Range gates for Surface mode,
+  the brush and MultiMesh stamps. The ghost preview turns red where the
+  surface under the cursor is out of range, and out-of-range stamps are
+  skipped with a status note. No more trees on cliffs or grass underwater.
+- **Mirror Placement** — every placement (click, paint stamp, brush deposit,
+  MultiMesh instance) also spawns a mirrored twin across a world X or Z
+  plane at a configurable offset. Yaw and roll are reflected, so pairs read
+  genuinely symmetric; the twin joins the same undo step.
+- **Random Seed Lock** — lock the seed and every random decision becomes
+  reproducible: re-paint the same stroke with the same seed and you get the
+  same layout. Reshuffle rolls a fresh seed; unlock returns to pure
+  randomness.
+- **Recent Assets bar** — the last eight assets you placed stay as clickable
+  chips right above the browser, persisted across sessions.
+
+Plus a hardening pass found while testing: MultiMesh strokes now snapshot
+correctly when combined with the brush, cancelling no longer discards an
+in-flight MultiMesh stroke (it commits as one undo step), MultiMesh stroke
+undo lives in the scene history, and undo→redo no longer loses the material
+override on placed assets.
+
+![Scene manager](screenshots/scene_manager.png)
+![Presets](screenshots/presets_tab.png)
 
 ## What's new in v2.5.2 — deep polish release
 
